@@ -1,0 +1,9 @@
+@PACKAGE_INIT@
+
+include(CMakeFindDependencyMacro)
+find_dependency(dpp 10)
+find_dependency(OpenSSL)
+
+include("${CMAKE_CURRENT_LIST_DIR}/thediscordlist-dpp-targets.cmake")
+
+check_required_components(thediscordlist-dpp)

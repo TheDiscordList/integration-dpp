@@ -1,0 +1,65 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    name: D++ ${{ matrix.dpp }} / ${{ matrix.compiler }}
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        dpp: ['10.0.35', '10.1.6']
+        compiler: [g++, clang++]
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Install D++ and the toolchain
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends cmake ninja-build clang libssl-dev zlib1g-dev libopus-dev
+          curl -fsSLo dpp.deb "https://github.com/brainboxdotcc/DPP/releases/download/v${{ matrix.dpp }}/libdpp-${{ matrix.dpp }}-linux-x64.deb"
+          sudo apt-get install -y ./dpp.deb
+
+      # Warnings are errors: this is the lint step.
+      - name: Build
+        run: |
+          cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Debug -DCMAKE_CXX_COMPILER=${{ matrix.compiler }} \
+            -DCMAKE_CXX_FLAGS="-Wall -Wextra -Wpedantic -Werror"
+          cmake --build build
+
+      - name: Test
+        run: ctest --test-dir build --output-on-failure
+
+      - name: Install, then build the example with find_package
+        run: |
+          cmake --install build --prefix "$RUNNER_TEMP/prefix"
+          cmake -S examples -B example-build -G Ninja -DCMAKE_CXX_COMPILER=${{ matrix.compiler }} \
+            -DCMAKE_PREFIX_PATH="$RUNNER_TEMP/prefix"
+          cmake --build example-build
+
+  sanitizers:
+    name: AddressSanitizer + UBSan
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Install D++ and the toolchain
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends cmake ninja-build libssl-dev zlib1g-dev libopus-dev
+          curl -fsSLo dpp.deb https://github.com/brainboxdotcc/DPP/releases/download/v10.1.6/libdpp-10.1.6-linux-x64.deb
+          sudo apt-get install -y ./dpp.deb
+
+      - name: Build and test
+        env:
+          UBSAN_OPTIONS: print_stacktrace=1:halt_on_error=1
+        run: |
+          cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Debug \
+            -DCMAKE_CXX_FLAGS="-fsanitize=address,undefined -fno-omit-frame-pointer" \
+            -DCMAKE_EXE_LINKER_FLAGS="-fsanitize=address,undefined"
+          cmake --build build
+          ctest --test-dir build --output-on-failure

@@ -1,0 +1,11 @@
+build/
+cmake-build-*/
+out/
+.vs/
+.vscode/
+.idea/
+.cache/
+vcpkg_installed/
+CMakeUserPresets.json
+compile_commands.json
+REPO_META.json

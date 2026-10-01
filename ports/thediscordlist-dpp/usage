@@ -1,0 +1,4 @@
+thediscordlist-dpp provides CMake targets:
+
+  find_package(thediscordlist-dpp CONFIG REQUIRED)
+  target_link_libraries(main PRIVATE thediscordlist::dpp)
