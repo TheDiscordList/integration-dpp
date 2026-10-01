@@ -45,6 +45,7 @@ int main() {
 	};
 	thediscordlist::autoposter poster(bot, env("TDL_TOKEN"), options);
 
+#if DPP_VERSION_LONG >= 0x00100100 // dpp::http_server arrived in D++ 10.1.0
 	std::unique_ptr<dpp::http_server> webhooks;
 	if (std::string secret = env("TDL_WEBHOOK_SECRET"); !secret.empty()) {
 		webhooks = std::make_unique<dpp::http_server>(&bot, "0.0.0.0", 8080, [secret](dpp::http_server_request* request) {
@@ -61,6 +62,7 @@ int main() {
 			}
 		});
 	}
+#endif
 
 	bot.start(dpp::st_wait);
 }

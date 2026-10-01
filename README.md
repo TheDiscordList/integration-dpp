@@ -198,6 +198,9 @@ can never verify. The timestamp window is 300 seconds either side by default
 
 ### With D++'s HTTP server
 
+`dpp::http_server` needs D++ 10.1 or later. On 10.0, call `verify_webhook` from
+whatever HTTP server you already run.
+
 ```cpp
 dpp::http_server webhooks(&bot, "0.0.0.0", 8080, [secret](dpp::http_server_request* request) {
     try {
