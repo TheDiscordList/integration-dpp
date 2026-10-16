@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.1.0 - Unreleased
+## 0.1.0 - 2026-10-16
 
 - `thediscordlist::autoposter`: stats, per-cluster heartbeats and global
   commands for a `dpp::cluster`, with the shared 429 suspension, retries,
