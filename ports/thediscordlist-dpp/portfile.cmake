@@ -4,7 +4,7 @@ vcpkg_from_github(
     OUT_SOURCE_PATH SOURCE_PATH
     REPO TheDiscordList/integration-dpp
     REF "v${VERSION}"
-    SHA512 0
+    SHA512 d68b0749a5149436fbe519e8063f56ec1341e2d9c8eb2c3db2ea500a15aadd76c57f28071daa37780247f5c726a1a5328c3780e16beb0fb07b0c5386aee343cf
     HEAD_REF main
 )
 
