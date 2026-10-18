@@ -228,6 +228,7 @@ this wired up.
 | Event | Fires for | `data` |
 | --- | --- | --- |
 | `listing.bumped` | servers, bots | `points`, `bumped_at`, `next_bump_at`, `user` |
+| `listing.bump_ready` | servers, bots | `ready_at` |
 | `listing.upvoted` | servers, bots | `voted_at`, `total_upvotes`, `user` |
 | `server.joined` | servers | `joined_at`, `user` |
 | `bot.added` | bots | `added_at`, `user` |
@@ -240,7 +241,8 @@ new events never break an existing endpoint.
 
 `bot.added` and `server.joined` are **click** events, dispatched on the install
 hand-off; Discord never confirms completion. `bot.stats_reported` is **not** an
-echo of your own post — it also fires when the owner edits the listing by hand.
+echo of your own post — it also fires when the owner edits the listing by hand,
+and on the heartbeat's stats forward.
 `created_at` is enqueue time, not send time; never use it for freshness.
 
 ### Rules for a healthy endpoint

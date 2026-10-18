@@ -128,6 +128,12 @@ void test_webhooks() {
 		webhook_error_code::missing_secret);
 	CHECK(verify_error(vector_body, header, "  ") == webhook_error_code::missing_secret);
 	CHECK(std::string(to_string(webhook_error_code::missing_secret)) == "MISSING_SECRET");
+
+	std::string bump_ready = R"({"id":"d4","event":"listing.bump_ready","created_at":"2026-10-18T12:00:00+00:00","listing":{"id":"9","type":"server","name":"S","url":"https://thediscordlist.com/servers/9"},"data":{"ready_at":"2026-10-18T12:00:00+00:00"}})";
+	auto ready = verify_webhook(bump_ready, "t=1700000000,v1=" + sign(vector_secret, "1700000000", bump_ready),
+		vector_secret, default_webhook_tolerance, vector_t);
+	CHECK(ready.event == "listing.bump_ready");
+	CHECK(ready.data["ready_at"] == "2026-10-18T12:00:00+00:00");
 }
 
 // ---------------------------------------------------------------------------------------

@@ -50,8 +50,8 @@ struct webhook_listing {
 struct webhook_event {
 	/** Equals X-TDL-Delivery and is stable across every retry: deduplicate on it. */
 	std::string id;
-	/** "listing.bumped", "listing.upvoted", "server.joined", "bot.added", "bot.stats_reported",
-	 * "webhook.ping", or a name added later. */
+	/** "listing.bumped", "listing.bump_ready", "listing.upvoted", "server.joined", "bot.added",
+	 * "bot.stats_reported", "webhook.ping", or a name added later. */
 	std::string event;
 	/** Enqueue time, not send time. Never use it for freshness. */
 	std::string created_at;
