@@ -38,7 +38,7 @@ std::optional<double> parse_finite(std::string_view text) {
 std::string hmac_sha256_hex(std::string_view secret, const std::string& message) {
 	unsigned char digest[EVP_MAX_MD_SIZE];
 	unsigned int length = 0;
-	HMAC(EVP_sha256(), secret.empty() ? "" : secret.data(), static_cast<int>(secret.size()),
+	HMAC(EVP_sha256(), secret.data(), static_cast<int>(secret.size()),
 		reinterpret_cast<const unsigned char*>(message.data()), message.size(), digest, &length);
 
 	static constexpr char hex[] = "0123456789abcdef";
@@ -65,6 +65,7 @@ const char* to_string(webhook_error_code code) noexcept {
 		case webhook_error_code::stale_timestamp: return "STALE_TIMESTAMP";
 		case webhook_error_code::invalid_signature: return "INVALID_SIGNATURE";
 		case webhook_error_code::malformed_body: return "MALFORMED_BODY";
+		case webhook_error_code::missing_secret: return "MISSING_SECRET";
 	}
 	return "UNKNOWN";
 }
@@ -75,6 +76,9 @@ webhook_error::webhook_error(webhook_error_code code, const std::string& message
 
 webhook_event verify_webhook(std::string_view raw_body, std::string_view signature_header, std::string_view secret,
 	std::chrono::seconds tolerance, std::optional<std::time_t> now) {
+	if (trim(secret).empty()) {
+		throw webhook_error(webhook_error_code::missing_secret, "The webhook secret is empty, so no delivery can verify.");
+	}
 	if (trim(signature_header).empty()) {
 		throw webhook_error(webhook_error_code::missing_signature, "Missing X-TDL-Signature header.");
 	}

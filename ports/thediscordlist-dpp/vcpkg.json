@@ -1,6 +1,6 @@
 {
   "name": "thediscordlist-dpp",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Official TheDiscordList integration for D++: auto-post server count, shard heartbeats and slash commands, and verify inbound webhooks.",
   "homepage": "https://github.com/TheDiscordList/integration-dpp",
   "license": "MIT",

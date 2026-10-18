@@ -5,6 +5,7 @@
 
 #include <thediscordlist/dpp.h>
 
+#include <chrono>
 #include <cstdint>
 #include <functional>
 #include <map>
@@ -22,14 +23,19 @@ inline constexpr std::int64_t stats_first_post_delay_ms = 5'000;
 /** Republish an unchanged count this often, so a listing never looks abandoned. */
 inline constexpr std::int64_t stats_force_after_ms = 1'800'000;
 inline constexpr std::int64_t stats_remeasure_ms = 60'000;
+/** No two stats posts come closer than this, whatever options.stats.min_gap says. */
+inline constexpr std::chrono::seconds stats_min_gap_floor{60};
 inline constexpr std::int64_t heartbeat_min_interval_ms = 15'000;
 inline constexpr std::int64_t heartbeat_max_interval_ms = 60'000;
 inline constexpr std::int64_t heartbeat_jitter_ms = 5'000;
+/** An out-of-band beat waits until at least this long after the previous one. */
+inline constexpr std::int64_t heartbeat_soon_gap_ms = 10'000;
 /** Offset from the first stats post: the two share one server-side rate budget. */
 inline constexpr std::int64_t commands_delay_ms = 10'000;
 /** The Gold tier is derived per request, so a bot can gain it mid-run. */
 inline constexpr std::int64_t plan_reprobe_ms = 1'800'000;
 inline constexpr std::int64_t max_latency_ms = 600'000;
+inline constexpr std::int64_t max_retry_after_ms = 3'600'000;
 inline constexpr int max_attempts = 3;
 inline constexpr const char* content_type = "application/json";
 
@@ -52,7 +58,8 @@ struct outcome {
 	std::string error;
 };
 
-outcome classify(const response& r, std::int64_t now_ms);
+/** unix_ms is wall-clock time, for X-RateLimit-Reset: the one value that needs it. */
+outcome classify(const response& r, std::int64_t unix_ms);
 std::int64_t backoff_ms(int attempt, double random01);
 
 struct shard_report {
@@ -79,6 +86,8 @@ commands_payload commands_body(std::string_view discord_response, bool post_empt
 std::optional<cluster_info> resolve_cluster(const std::optional<cluster_info>& configured, std::uint32_t cluster_id,
 	std::uint32_t maxclusters);
 
+/** Trimmed, with a pasted "Bearer " prefix removed. */
+std::string clean_token(std::string_view token);
 std::string user_agent();
 std::multimap<std::string, std::string> request_headers(const std::string& token);
 
@@ -168,7 +177,7 @@ private:
 	bool heartbeat_started_ = false;
 	bool stopped_ = false;
 
-	/** One client-wide 429 suspension: the API keeps one counter per IP across every route. */
+	/** One client-wide 429 suspension: stats and commands share one per-bot budget. */
 	std::int64_t suspended_until_ = 0;
 
 	state stats_{publisher::stats};
@@ -180,6 +189,7 @@ private:
 	std::optional<std::uint64_t> last_count_;
 	std::uint32_t last_shard_count_ = 0;
 	std::int64_t heartbeat_interval_ms_;
+	std::optional<std::int64_t> last_beat_at_;
 };
 
 }

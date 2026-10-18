@@ -47,11 +47,12 @@ It starts three publishers:
 | Publisher | What it sends | Cadence |
 | --- | --- | --- |
 | Stats | `server_count`, `shard_count` | 5s after the first shard is ready, then every 5 min, debounced on guild join/leave |
-| Heartbeat | per-shard status, latency and guild counts | every ~30s, plus 1s after any shard becomes ready or resumes |
+| Heartbeat | per-shard status, latency and guild counts | every 30–35s, plus once when a shard becomes ready or resumes (at least 10s after the previous beat) |
 | Commands | your global slash commands | once, ~10s after ready |
 
 Your **stats token** is on the listing's manage page, under the API tab. It is
 scoped to one listing, so it is the only credential this package needs.
+Surrounding whitespace and a pasted `Bearer ` prefix are stripped.
 
 The `autoposter` can be constructed before or after `bot.start()`. With an
 empty token it logs a warning and stays inert — a forgotten environment
@@ -112,7 +113,7 @@ options.base_url = "https://thediscordlist.com/api";
 options.stats.enabled = true;
 options.stats.interval = std::chrono::minutes(5);
 options.stats.debounce = std::chrono::seconds(20);
-options.stats.min_gap = std::chrono::seconds(60);
+options.stats.min_gap = std::chrono::seconds(60);     // never below 60s
 
 options.heartbeat.enabled = true;
 options.heartbeat.interval = std::chrono::seconds(30); // 15–60s, retuned from the API
@@ -126,10 +127,11 @@ options.server_count = [] { return std::optional<std::uint64_t>(1234); };
 thediscordlist::autoposter poster(bot, token, options);
 ```
 
-`min_gap` is a hard floor between two stats POSTs. A join storm, a mass
-reconnect and a manual `post_stats()` all route through it, so the ceiling is
-structurally one request per minute. An unchanged count is not re-sent for 30
-minutes: every stats post re-indexes the listing and fires a webhook.
+`min_gap` is a hard floor between two stats POSTs and is never below 60
+seconds. A join storm, a mass reconnect and a manual `post_stats()` all route
+through it, so the ceiling is structurally one request per minute. An unchanged
+count is not re-sent for 30 minutes: every stats post re-indexes the listing
+and fires a webhook.
 
 `commands.post_empty` is `false` because posting an empty list **clears** the
 commands on your listing. Turn it on only if that is what you mean.
@@ -187,7 +189,8 @@ try {
     // event.id, event.event, event.created_at, event.listing.{id,type,name,url}, event.data
 } catch (const thediscordlist::webhook_error& error) {
     // error.code(): missing_signature, malformed_signature, stale_timestamp,
-    // invalid_signature or malformed_body; to_string(error.code()) gives "INVALID_SIGNATURE" etc.
+    // invalid_signature, malformed_body or missing_secret (an empty secret never
+    // verifies); to_string(error.code()) gives "INVALID_SIGNATURE" etc.
 }
 ```
 
@@ -227,6 +230,7 @@ this wired up.
 | Event | Fires for | `data` |
 | --- | --- | --- |
 | `listing.bumped` | servers, bots | `points`, `bumped_at`, `next_bump_at`, `user` |
+| `listing.bump_ready` | servers, bots | `ready_at` |
 | `listing.upvoted` | servers, bots | `voted_at`, `total_upvotes`, `user` |
 | `server.joined` | servers | `joined_at`, `user` |
 | `bot.added` | bots | `added_at`, `user` |
@@ -239,7 +243,8 @@ new events never break an existing endpoint.
 
 `bot.added` and `server.joined` are **click** events, dispatched on the install
 hand-off; Discord never confirms completion. `bot.stats_reported` is **not** an
-echo of your own post — it also fires when the owner edits the listing by hand.
+echo of your own post — it also fires when the owner edits the listing by hand,
+and on the heartbeat's stats forward.
 `created_at` is enqueue time, not send time; never use it for freshness.
 
 ### Rules for a healthy endpoint
@@ -263,17 +268,18 @@ echo of your own post — it also fires when the owner edits the listing by hand
   suspends and reprobes every 30 minutes rather than disabling: the plan is
   checked per request, so a bot can gain it mid-run.
 - **Rate limits are shared.** Stats and commands share 60 requests a minute per
-  client IP; heartbeats have 120. On a `429` the poster honours `Retry-After`
-  and `X-RateLimit-Reset` with one client-wide suspension that stats and
+  bot; heartbeats have 120. On a `429` the poster honours `Retry-After`
+  and `X-RateLimit-Reset` (60s without either, at most an hour) with one client-wide suspension that stats and
   commands share, while heartbeats keep going — a stale number beats a false
-  "down" on your status page. Other bots behind the same egress IP count
-  against you.
+  "down" on your status page.
 - **`404` never means "bad token".** It means the id is unknown or belongs to a
   server listing; the publisher disables itself with reason `not-found`. A
   `401` is the bad-token case and disables every publisher. A `409` on commands
   means the listing is not set up for slash commands.
-- `5xx`, timeouts and network errors are retried up to 3 times with backoff,
-  then wait for the next tick. Requests time out after 10 seconds.
+- `408`, `425`, `5xx`, timeouts and network errors are retried up to 3 times
+  with backoff, and a `429` once its wait is over, unless the next tick comes
+  first. Any other `4xx` is reported once and not retried. Requests time out
+  after 10 seconds.
 - D++ timers tick once a second, so every delay here is whole seconds.
 - The server count is D++'s guild cache. Without `dpp::i_guilds` the cache never
   changes (the poster warns once), and a cache policy with `guild_policy =
@@ -292,7 +298,7 @@ echo of your own post — it also fires when the owner edits the listing by hand
 include(FetchContent)
 FetchContent_Declare(thediscordlist-dpp
     GIT_REPOSITORY https://github.com/TheDiscordList/integration-dpp.git
-    GIT_TAG v0.1.0)
+    GIT_TAG v0.2.0)
 FetchContent_MakeAvailable(thediscordlist-dpp)
 
 target_link_libraries(bot PRIVATE thediscordlist::dpp)
@@ -335,8 +341,11 @@ Every release:
 1. Bump the version in `CMakeLists.txt` (`project(... VERSION)`),
    `include/thediscordlist/dpp.h` (`version`),
    `ports/thediscordlist-dpp/vcpkg.json` and `CHANGELOG.md`. The release
-   workflow refuses a tag that disagrees with any of them.
-2. `git tag v0.1.0 && git push origin v0.1.0`. The workflow builds, tests,
+   workflow refuses a tag that disagrees with any of them. Bump the
+   `find_package` version in `examples/CMakeLists.txt` with a minor release:
+   CI builds the example against the installed package and fails on a
+   mismatch.
+2. `git tag v0.2.0 && git push origin v0.2.0`. The workflow builds, tests,
    attaches a source tarball and prints the vcpkg `SHA512` of the tag archive in
    the release notes.
 3. In the vcpkg fork, copy `ports/thediscordlist-dpp` to `ports/` and replace

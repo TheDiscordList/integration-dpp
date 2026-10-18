@@ -5,6 +5,7 @@
 
 #include <cctype>
 #include <cstdio>
+#include <fstream>
 #include <string>
 #include <vector>
 
@@ -122,6 +123,18 @@ void test_webhooks() {
 	CHECK(parsed.data["stars"] == 5);
 
 	CHECK(std::string(to_string(webhook_error_code::invalid_signature)) == "INVALID_SIGNATURE");
+
+	// An empty secret fails closed, even against a header signed with an empty key.
+	CHECK(verify_error(vector_body, "t=1700000000,v1=" + sign("", "1700000000", vector_body), "") ==
+		webhook_error_code::missing_secret);
+	CHECK(verify_error(vector_body, header, "  ") == webhook_error_code::missing_secret);
+	CHECK(std::string(to_string(webhook_error_code::missing_secret)) == "MISSING_SECRET");
+
+	std::string bump_ready = R"({"id":"d4","event":"listing.bump_ready","created_at":"2026-10-18T12:00:00+00:00","listing":{"id":"9","type":"server","name":"S","url":"https://thediscordlist.com/servers/9"},"data":{"ready_at":"2026-10-18T12:00:00+00:00"}})";
+	auto ready = verify_webhook(bump_ready, "t=1700000000,v1=" + sign(vector_secret, "1700000000", bump_ready),
+		vector_secret, default_webhook_tolerance, vector_t);
+	CHECK(ready.event == "listing.bump_ready");
+	CHECK(ready.data["ready_at"] == "2026-10-18T12:00:00+00:00");
 }
 
 // ---------------------------------------------------------------------------------------
@@ -165,6 +178,13 @@ void test_shaping() {
 		"TheDiscordList-dpp/" + std::string(version) + " (+https://github.com/TheDiscordList/integration-dpp)");
 	CHECK(std::string(detail::content_type) == "application/json");
 	CHECK(std::string(version) == THEDISCORDLIST_DPP_PROJECT_VERSION);
+	std::ifstream manifest(THEDISCORDLIST_DPP_VCPKG_MANIFEST);
+	auto port = json::parse(manifest, nullptr, false);
+	CHECK(port.is_object() && port["version"] == version);
+
+	CHECK(detail::clean_token("  Bearer tok \n") == "tok");
+	CHECK(detail::clean_token("tok") == "tok");
+	CHECK(detail::clean_token(" ").empty());
 
 	CHECK(detail::resolve_cluster(std::nullopt, 0, 1)->count == 1);
 	CHECK(detail::resolve_cluster(std::nullopt, 2, 3)->id == 2);
@@ -197,6 +217,10 @@ void test_classify() {
 	CHECK(detail::classify(reply(409), now).kind == outcome_kind::config);
 	CHECK(detail::classify(reply(400), now).kind == outcome_kind::payload);
 	CHECK(detail::classify(reply(422), now).kind == outcome_kind::payload);
+	CHECK(detail::classify(reply(405), now).kind == outcome_kind::payload);
+	CHECK(detail::classify(reply(413), now).kind == outcome_kind::payload);
+	CHECK(detail::classify(reply(408), now).kind == outcome_kind::transient);
+	CHECK(detail::classify(reply(425), now).kind == outcome_kind::transient);
 	CHECK(detail::classify(reply(500), now).kind == outcome_kind::transient);
 	CHECK(detail::classify(reply(503), now).kind == outcome_kind::transient);
 	CHECK(detail::classify(reply(0), now).kind == outcome_kind::transient);
@@ -206,6 +230,8 @@ void test_classify() {
 	CHECK(detail::classify(reply(429, "", "junk"), now).retry_after_ms == 60'000);
 	CHECK(detail::classify(reply(429, "", "7", std::to_string(now / 1000 + 90)), now).retry_after_ms == 90'000);
 	CHECK(detail::classify(reply(429, "", "120", std::to_string(now / 1000 + 5)), now).retry_after_ms == 120'000);
+	CHECK(detail::classify(reply(429, "", "86400"), now).retry_after_ms == detail::max_retry_after_ms);
+	CHECK(detail::classify(reply(429, "", "1e300"), now).retry_after_ms == detail::max_retry_after_ms);
 
 	CHECK(detail::backoff_ms(0, 0.0) == 500);
 	CHECK(detail::backoff_ms(0, 1.0) == 1000);
@@ -493,6 +519,61 @@ void test_throttle_is_shared_but_heartbeats_bypass() {
 	CHECK(h->host->requests.back().path == "/bots/123/commands");
 }
 
+void test_throttle_is_retried_before_the_next_tick() {
+	auto h = make(only(publisher::stats));
+	h->engine->start();
+	h->host->advance(5'000);
+	h->host->respond(0, reply(429, "", "30"));
+	h->host->advance(29'999);
+	CHECK(h->host->requests.size() == 1);
+	h->host->advance(1);
+	CHECK(h->host->requests.size() == 2);
+	h->host->respond(1, reply(200));
+	CHECK(h->posted.size() == 1);
+
+	// A wait past the next tick is left to that tick.
+	auto late = make(only(publisher::stats));
+	post_result result;
+	late->engine->post(publisher::stats, [&](const post_result& r) { result = r; });
+	late->host->respond(0, reply(429, "", "600"));
+	CHECK(result.status == 429);
+	CHECK(result.skipped == "throttled");
+	late->host->advance(599'000);
+	CHECK(late->host->requests.size() == 1);
+}
+
+void test_out_of_band_beats_keep_their_distance() {
+	auto h = make(only(publisher::heartbeat));
+	h->engine->start();
+	h->host->advance(0);
+	h->host->respond(0, reply(200));
+
+	// A shard resumes right after a beat: the extra one waits out the gap.
+	h->engine->beat_now();
+	h->host->advance(9'999);
+	CHECK(h->host->requests.size() == 1);
+	h->host->advance(1);
+	CHECK(h->host->requests.size() == 2);
+	h->host->respond(1, reply(200));
+
+	// Long after the last beat, it goes out within a second.
+	h->host->advance(25'000);
+	CHECK(h->host->requests.size() == 2);
+	h->engine->beat_now();
+	h->host->advance(1'000);
+	CHECK(h->host->requests.size() == 3);
+}
+
+void test_min_gap_has_a_floor() {
+	options opts = only(publisher::stats);
+	opts.stats.min_gap = std::chrono::seconds(0);
+	auto h = make(opts);
+	CHECK(manual(*h->engine, publisher::stats).skipped == "pending");
+	h->host->respond(0, reply(200));
+	h->host->count = 43;
+	CHECK(manual(*h->engine, publisher::stats).skipped == "min-gap");
+}
+
 void test_server_errors_are_retried() {
 	auto h = make(only(publisher::stats));
 	h->engine->start();
@@ -607,6 +688,9 @@ int main() {
 	test_plan_suspends_heartbeat();
 	test_not_found_and_conflict_disable();
 	test_throttle_is_shared_but_heartbeats_bypass();
+	test_throttle_is_retried_before_the_next_tick();
+	test_out_of_band_beats_keep_their_distance();
+	test_min_gap_has_a_floor();
 	test_server_errors_are_retried();
 	test_payload_errors_are_reported_once();
 	test_unknown_cluster_count_never_beats();

@@ -20,9 +20,12 @@ enum class webhook_error_code {
 	stale_timestamp,
 	invalid_signature,
 	malformed_body,
+	/** A configuration error: an empty secret never verifies anything. */
+	missing_secret,
 };
 
-/** "MISSING_SIGNATURE", "MALFORMED_SIGNATURE", "STALE_TIMESTAMP", "INVALID_SIGNATURE" or "MALFORMED_BODY". */
+/** "MISSING_SIGNATURE", "MALFORMED_SIGNATURE", "STALE_TIMESTAMP", "INVALID_SIGNATURE", "MALFORMED_BODY" or
+ * "MISSING_SECRET". */
 const char* to_string(webhook_error_code code) noexcept;
 
 class webhook_error : public std::runtime_error {
@@ -47,8 +50,8 @@ struct webhook_listing {
 struct webhook_event {
 	/** Equals X-TDL-Delivery and is stable across every retry: deduplicate on it. */
 	std::string id;
-	/** "listing.bumped", "listing.upvoted", "server.joined", "bot.added", "bot.stats_reported",
-	 * "webhook.ping", or a name added later. */
+	/** "listing.bumped", "listing.bump_ready", "listing.upvoted", "server.joined", "bot.added",
+	 * "bot.stats_reported", "webhook.ping", or a name added later. */
 	std::string event;
 	/** Enqueue time, not send time. Never use it for freshness. */
 	std::string created_at;

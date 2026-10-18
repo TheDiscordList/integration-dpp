@@ -30,7 +30,7 @@ public:
 
 	std::int64_t now_ms() override {
 		return std::chrono::duration_cast<std::chrono::milliseconds>(
-			std::chrono::system_clock::now().time_since_epoch()).count();
+			std::chrono::steady_clock::now().time_since_epoch()).count();
 	}
 
 	double random() override {
@@ -187,6 +187,7 @@ struct autoposter::impl {
 };
 
 autoposter::autoposter(dpp::cluster& bot, std::string token, options opts) : impl_(std::make_unique<impl>(bot)) {
+	token = detail::clean_token(token);
 	if (token.empty()) {
 		bot.log(dpp::ll_warning, "[thediscordlist] No stats token supplied; auto-posting is disabled.");
 		return;
