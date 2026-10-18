@@ -20,9 +20,12 @@ enum class webhook_error_code {
 	stale_timestamp,
 	invalid_signature,
 	malformed_body,
+	/** A configuration error: an empty secret never verifies anything. */
+	missing_secret,
 };
 
-/** "MISSING_SIGNATURE", "MALFORMED_SIGNATURE", "STALE_TIMESTAMP", "INVALID_SIGNATURE" or "MALFORMED_BODY". */
+/** "MISSING_SIGNATURE", "MALFORMED_SIGNATURE", "STALE_TIMESTAMP", "INVALID_SIGNATURE", "MALFORMED_BODY" or
+ * "MISSING_SECRET". */
 const char* to_string(webhook_error_code code) noexcept;
 
 class webhook_error : public std::runtime_error {

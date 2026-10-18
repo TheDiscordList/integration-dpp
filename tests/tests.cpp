@@ -122,6 +122,12 @@ void test_webhooks() {
 	CHECK(parsed.data["stars"] == 5);
 
 	CHECK(std::string(to_string(webhook_error_code::invalid_signature)) == "INVALID_SIGNATURE");
+
+	// An empty secret fails closed, even against a header signed with an empty key.
+	CHECK(verify_error(vector_body, "t=1700000000,v1=" + sign("", "1700000000", vector_body), "") ==
+		webhook_error_code::missing_secret);
+	CHECK(verify_error(vector_body, header, "  ") == webhook_error_code::missing_secret);
+	CHECK(std::string(to_string(webhook_error_code::missing_secret)) == "MISSING_SECRET");
 }
 
 // ---------------------------------------------------------------------------------------

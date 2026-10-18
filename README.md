@@ -187,7 +187,8 @@ try {
     // event.id, event.event, event.created_at, event.listing.{id,type,name,url}, event.data
 } catch (const thediscordlist::webhook_error& error) {
     // error.code(): missing_signature, malformed_signature, stale_timestamp,
-    // invalid_signature or malformed_body; to_string(error.code()) gives "INVALID_SIGNATURE" etc.
+    // invalid_signature, malformed_body or missing_secret (an empty secret never
+    // verifies); to_string(error.code()) gives "INVALID_SIGNATURE" etc.
 }
 ```
 
