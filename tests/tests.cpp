@@ -5,6 +5,7 @@
 
 #include <cctype>
 #include <cstdio>
+#include <fstream>
 #include <string>
 #include <vector>
 
@@ -177,6 +178,10 @@ void test_shaping() {
 		"TheDiscordList-dpp/" + std::string(version) + " (+https://github.com/TheDiscordList/integration-dpp)");
 	CHECK(std::string(detail::content_type) == "application/json");
 	CHECK(std::string(version) == THEDISCORDLIST_DPP_PROJECT_VERSION);
+	std::ifstream manifest(THEDISCORDLIST_DPP_VCPKG_MANIFEST);
+	auto port = json::parse(manifest, nullptr, false);
+	CHECK(port.is_object() && port["version"] == version);
+
 	CHECK(detail::clean_token("  Bearer tok \n") == "tok");
 	CHECK(detail::clean_token("tok") == "tok");
 	CHECK(detail::clean_token(" ").empty());

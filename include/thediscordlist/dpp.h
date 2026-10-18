@@ -20,7 +20,7 @@
 
 namespace thediscordlist {
 
-inline constexpr const char* version = "0.1.0";
+inline constexpr const char* version = "0.2.0";
 inline constexpr const char* default_base_url = "https://thediscordlist.com/api";
 
 enum class publisher { stats, heartbeat, commands };

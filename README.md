@@ -299,7 +299,7 @@ and on the heartbeat's stats forward.
 include(FetchContent)
 FetchContent_Declare(thediscordlist-dpp
     GIT_REPOSITORY https://github.com/TheDiscordList/integration-dpp.git
-    GIT_TAG v0.1.0)
+    GIT_TAG v0.2.0)
 FetchContent_MakeAvailable(thediscordlist-dpp)
 
 target_link_libraries(bot PRIVATE thediscordlist::dpp)
