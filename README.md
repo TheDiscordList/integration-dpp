@@ -341,8 +341,11 @@ Every release:
 1. Bump the version in `CMakeLists.txt` (`project(... VERSION)`),
    `include/thediscordlist/dpp.h` (`version`),
    `ports/thediscordlist-dpp/vcpkg.json` and `CHANGELOG.md`. The release
-   workflow refuses a tag that disagrees with any of them.
-2. `git tag v0.1.0 && git push origin v0.1.0`. The workflow builds, tests,
+   workflow refuses a tag that disagrees with any of them. Bump the
+   `find_package` version in `examples/CMakeLists.txt` with a minor release:
+   CI builds the example against the installed package and fails on a
+   mismatch.
+2. `git tag v0.2.0 && git push origin v0.2.0`. The workflow builds, tests,
    attaches a source tarball and prints the vcpkg `SHA512` of the tag archive in
    the release notes.
 3. In the vcpkg fork, copy `ports/thediscordlist-dpp` to `ports/` and replace
