@@ -86,6 +86,8 @@ commands_payload commands_body(std::string_view discord_response, bool post_empt
 std::optional<cluster_info> resolve_cluster(const std::optional<cluster_info>& configured, std::uint32_t cluster_id,
 	std::uint32_t maxclusters);
 
+/** Trimmed, with a pasted "Bearer " prefix removed. */
+std::string clean_token(std::string_view token);
 std::string user_agent();
 std::multimap<std::string, std::string> request_headers(const std::string& token);
 

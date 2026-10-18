@@ -52,6 +52,7 @@ It starts three publishers:
 
 Your **stats token** is on the listing's manage page, under the API tab. It is
 scoped to one listing, so it is the only credential this package needs.
+Surrounding whitespace and a pasted `Bearer ` prefix are stripped.
 
 The `autoposter` can be constructed before or after `bot.start()`. With an
 empty token it logs a warning and stays inert — a forgotten environment

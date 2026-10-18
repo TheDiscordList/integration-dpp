@@ -187,6 +187,7 @@ struct autoposter::impl {
 };
 
 autoposter::autoposter(dpp::cluster& bot, std::string token, options opts) : impl_(std::make_unique<impl>(bot)) {
+	token = detail::clean_token(token);
 	if (token.empty()) {
 		bot.log(dpp::ll_warning, "[thediscordlist] No stats token supplied; auto-posting is disabled.");
 		return;

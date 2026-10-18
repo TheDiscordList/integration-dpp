@@ -177,6 +177,9 @@ void test_shaping() {
 		"TheDiscordList-dpp/" + std::string(version) + " (+https://github.com/TheDiscordList/integration-dpp)");
 	CHECK(std::string(detail::content_type) == "application/json");
 	CHECK(std::string(version) == THEDISCORDLIST_DPP_PROJECT_VERSION);
+	CHECK(detail::clean_token("  Bearer tok \n") == "tok");
+	CHECK(detail::clean_token("tok") == "tok");
+	CHECK(detail::clean_token(" ").empty());
 
 	CHECK(detail::resolve_cluster(std::nullopt, 0, 1)->count == 1);
 	CHECK(detail::resolve_cluster(std::nullopt, 2, 3)->id == 2);

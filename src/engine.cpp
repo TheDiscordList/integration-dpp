@@ -1,6 +1,7 @@
 #include "engine.h"
 
 #include <algorithm>
+#include <cctype>
 #include <cmath>
 #include <cstdlib>
 
@@ -40,6 +41,16 @@ std::int64_t to_ms(std::chrono::seconds seconds) {
 std::int64_t unix_now_ms() {
 	return std::chrono::duration_cast<std::chrono::milliseconds>(
 		std::chrono::system_clock::now().time_since_epoch()).count();
+}
+
+std::string_view trim(std::string_view text) {
+	while (!text.empty() && std::isspace(static_cast<unsigned char>(text.front()))) {
+		text.remove_prefix(1);
+	}
+	while (!text.empty() && std::isspace(static_cast<unsigned char>(text.back()))) {
+		text.remove_suffix(1);
+	}
+	return text;
 }
 
 post_result skipped(const char* reason) {
@@ -172,6 +183,14 @@ std::optional<cluster_info> resolve_cluster(const std::optional<cluster_info>& c
 		return std::nullopt;
 	}
 	return cluster;
+}
+
+std::string clean_token(std::string_view token) {
+	token = trim(token);
+	if (token.substr(0, 7) == "Bearer ") {
+		token = trim(token.substr(7));
+	}
+	return std::string(token);
 }
 
 std::string user_agent() {
