@@ -534,6 +534,38 @@ void test_throttle_is_retried_before_the_next_tick() {
 	CHECK(late->host->requests.size() == 1);
 }
 
+void test_out_of_band_beats_keep_their_distance() {
+	auto h = make(only(publisher::heartbeat));
+	h->engine->start();
+	h->host->advance(0);
+	h->host->respond(0, reply(200));
+
+	// A shard resumes right after a beat: the extra one waits out the gap.
+	h->engine->beat_now();
+	h->host->advance(9'999);
+	CHECK(h->host->requests.size() == 1);
+	h->host->advance(1);
+	CHECK(h->host->requests.size() == 2);
+	h->host->respond(1, reply(200));
+
+	// Long after the last beat, it goes out within a second.
+	h->host->advance(25'000);
+	CHECK(h->host->requests.size() == 2);
+	h->engine->beat_now();
+	h->host->advance(1'000);
+	CHECK(h->host->requests.size() == 3);
+}
+
+void test_min_gap_has_a_floor() {
+	options opts = only(publisher::stats);
+	opts.stats.min_gap = std::chrono::seconds(0);
+	auto h = make(opts);
+	CHECK(manual(*h->engine, publisher::stats).skipped == "pending");
+	h->host->respond(0, reply(200));
+	h->host->count = 43;
+	CHECK(manual(*h->engine, publisher::stats).skipped == "min-gap");
+}
+
 void test_server_errors_are_retried() {
 	auto h = make(only(publisher::stats));
 	h->engine->start();
@@ -649,6 +681,8 @@ int main() {
 	test_not_found_and_conflict_disable();
 	test_throttle_is_shared_but_heartbeats_bypass();
 	test_throttle_is_retried_before_the_next_tick();
+	test_out_of_band_beats_keep_their_distance();
+	test_min_gap_has_a_floor();
 	test_server_errors_are_retried();
 	test_payload_errors_are_reported_once();
 	test_unknown_cluster_count_never_beats();

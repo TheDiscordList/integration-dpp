@@ -58,13 +58,13 @@ struct options {
 		std::chrono::seconds interval{300};
 		/** Trailing debounce after guild join/leave. */
 		std::chrono::seconds debounce{20};
-		/** Hard floor between two stats POSTs, manual posts included. */
+		/** Hard floor between two stats POSTs, manual posts included. Never below 60 seconds. */
 		std::chrono::seconds min_gap{60};
 	} stats;
 
 	struct {
 		bool enabled = true;
-		/** Starting cadence; retuned from the API response. */
+		/** Starting cadence, clamped to 15 to 60 seconds; retuned from the API response. */
 		std::chrono::seconds interval{30};
 	} heartbeat;
 

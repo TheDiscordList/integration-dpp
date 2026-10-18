@@ -186,6 +186,7 @@ std::multimap<std::string, std::string> request_headers(const std::string& token
 engine::engine(std::unique_ptr<host> h, options opts, std::optional<cluster_info> cluster, bool elected)
 	: host_(std::move(h)), opts_(std::move(opts)), cluster_(cluster), elected_(elected),
 	  heartbeat_interval_ms_(std::clamp(to_ms(opts_.heartbeat.interval), heartbeat_min_interval_ms, heartbeat_max_interval_ms)) {
+	opts_.stats.min_gap = std::max(opts_.stats.min_gap, stats_min_gap_floor);
 }
 
 template <class F>
@@ -438,10 +439,13 @@ void engine::guild_changed() {
 
 void engine::beat_now() {
 	locked([&] {
-		if (!heartbeat_started_ || heartbeat_.disabled || host_->now_ms() < heartbeat_.plan_until) {
+		auto now = host_->now_ms();
+		if (!heartbeat_started_ || heartbeat_.disabled || now < heartbeat_.plan_until) {
 			return;
 		}
-		schedule(heartbeat_, 1000, &engine::heartbeat_tick);
+		// Coalesced, and never sooner than heartbeat_soon_gap_ms after the previous beat.
+		auto since = last_beat_at_ ? now - *last_beat_at_ : heartbeat_soon_gap_ms;
+		schedule(heartbeat_, std::max<std::int64_t>(1000, heartbeat_soon_gap_ms - since), &engine::heartbeat_tick);
 	});
 }
 
@@ -565,6 +569,7 @@ void engine::beat(bool manual, result_callback done) {
 	}
 
 	heartbeat_.in_flight = true;
+	last_beat_at_ = host_->now_ms();
 	send(heartbeat_, "/bots/" + bot_id + "/heartbeat", heartbeat_body(*cluster_, shards).dump(), true,
 		heartbeat_interval_ms_, [this, manual, done](const post_result& result) {
 			heartbeat_.in_flight = false;

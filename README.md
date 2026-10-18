@@ -47,7 +47,7 @@ It starts three publishers:
 | Publisher | What it sends | Cadence |
 | --- | --- | --- |
 | Stats | `server_count`, `shard_count` | 5s after the first shard is ready, then every 5 min, debounced on guild join/leave |
-| Heartbeat | per-shard status, latency and guild counts | every ~30s, plus 1s after any shard becomes ready or resumes |
+| Heartbeat | per-shard status, latency and guild counts | every 30–35s, plus once when a shard becomes ready or resumes (at least 10s after the previous beat) |
 | Commands | your global slash commands | once, ~10s after ready |
 
 Your **stats token** is on the listing's manage page, under the API tab. It is
@@ -112,7 +112,7 @@ options.base_url = "https://thediscordlist.com/api";
 options.stats.enabled = true;
 options.stats.interval = std::chrono::minutes(5);
 options.stats.debounce = std::chrono::seconds(20);
-options.stats.min_gap = std::chrono::seconds(60);
+options.stats.min_gap = std::chrono::seconds(60);     // never below 60s
 
 options.heartbeat.enabled = true;
 options.heartbeat.interval = std::chrono::seconds(30); // 15–60s, retuned from the API
@@ -126,10 +126,11 @@ options.server_count = [] { return std::optional<std::uint64_t>(1234); };
 thediscordlist::autoposter poster(bot, token, options);
 ```
 
-`min_gap` is a hard floor between two stats POSTs. A join storm, a mass
-reconnect and a manual `post_stats()` all route through it, so the ceiling is
-structurally one request per minute. An unchanged count is not re-sent for 30
-minutes: every stats post re-indexes the listing and fires a webhook.
+`min_gap` is a hard floor between two stats POSTs and is never below 60
+seconds. A join storm, a mass reconnect and a manual `post_stats()` all route
+through it, so the ceiling is structurally one request per minute. An unchanged
+count is not re-sent for 30 minutes: every stats post re-indexes the listing
+and fires a webhook.
 
 `commands.post_empty` is `false` because posting an empty list **clears** the
 commands on your listing. Turn it on only if that is what you mean.

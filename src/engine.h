@@ -5,6 +5,7 @@
 
 #include <thediscordlist/dpp.h>
 
+#include <chrono>
 #include <cstdint>
 #include <functional>
 #include <map>
@@ -22,9 +23,13 @@ inline constexpr std::int64_t stats_first_post_delay_ms = 5'000;
 /** Republish an unchanged count this often, so a listing never looks abandoned. */
 inline constexpr std::int64_t stats_force_after_ms = 1'800'000;
 inline constexpr std::int64_t stats_remeasure_ms = 60'000;
+/** No two stats posts come closer than this, whatever options.stats.min_gap says. */
+inline constexpr std::chrono::seconds stats_min_gap_floor{60};
 inline constexpr std::int64_t heartbeat_min_interval_ms = 15'000;
 inline constexpr std::int64_t heartbeat_max_interval_ms = 60'000;
 inline constexpr std::int64_t heartbeat_jitter_ms = 5'000;
+/** An out-of-band beat waits until at least this long after the previous one. */
+inline constexpr std::int64_t heartbeat_soon_gap_ms = 10'000;
 /** Offset from the first stats post: the two share one server-side rate budget. */
 inline constexpr std::int64_t commands_delay_ms = 10'000;
 /** The Gold tier is derived per request, so a bot can gain it mid-run. */
@@ -182,6 +187,7 @@ private:
 	std::optional<std::uint64_t> last_count_;
 	std::uint32_t last_shard_count_ = 0;
 	std::int64_t heartbeat_interval_ms_;
+	std::optional<std::int64_t> last_beat_at_;
 };
 
 }
