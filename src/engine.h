@@ -30,6 +30,7 @@ inline constexpr std::int64_t commands_delay_ms = 10'000;
 /** The Gold tier is derived per request, so a bot can gain it mid-run. */
 inline constexpr std::int64_t plan_reprobe_ms = 1'800'000;
 inline constexpr std::int64_t max_latency_ms = 600'000;
+inline constexpr std::int64_t max_retry_after_ms = 3'600'000;
 inline constexpr int max_attempts = 3;
 inline constexpr const char* content_type = "application/json";
 
@@ -52,7 +53,8 @@ struct outcome {
 	std::string error;
 };
 
-outcome classify(const response& r, std::int64_t now_ms);
+/** unix_ms is wall-clock time, for X-RateLimit-Reset: the one value that needs it. */
+outcome classify(const response& r, std::int64_t unix_ms);
 std::int64_t backoff_ms(int attempt, double random01);
 
 struct shard_report {

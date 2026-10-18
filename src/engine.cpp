@@ -37,6 +37,11 @@ std::int64_t to_ms(std::chrono::seconds seconds) {
 	return std::chrono::duration_cast<std::chrono::milliseconds>(seconds).count();
 }
 
+std::int64_t unix_now_ms() {
+	return std::chrono::duration_cast<std::chrono::milliseconds>(
+		std::chrono::system_clock::now().time_since_epoch()).count();
+}
+
 post_result skipped(const char* reason) {
 	return {false, 0, reason};
 }
@@ -58,7 +63,7 @@ std::string explain(const std::string& reason, publisher kind) {
 
 }
 
-outcome classify(const response& r, std::int64_t now_ms) {
+outcome classify(const response& r, std::int64_t unix_ms) {
 	outcome o;
 	o.status = r.status;
 	if (r.status >= 200 && r.status < 300) {
@@ -81,21 +86,26 @@ outcome classify(const response& r, std::int64_t now_ms) {
 		case 409:
 			o.kind = outcome_kind::config;
 			return o;
-		case 400:
-		case 422:
-			o.kind = outcome_kind::payload;
-			return o;
 		case 429: {
 			o.kind = outcome_kind::throttled;
 			auto seconds = parse_number(r.retry_after);
-			o.retry_after_ms = seconds && *seconds > 0 ? std::llround(*seconds * 1000) : 60'000;
+			double wait_ms = seconds && *seconds > 0 ? *seconds * 1000 : 60'000.0;
 			auto reset = parse_number(r.ratelimit_reset);
 			if (reset && *reset > 0) {
-				o.retry_after_ms = std::max<std::int64_t>(o.retry_after_ms, std::llround(*reset * 1000) - now_ms);
+				wait_ms = std::max(wait_ms, *reset * 1000 - static_cast<double>(unix_ms));
 			}
+			o.retry_after_ms = std::llround(std::min(wait_ms, static_cast<double>(max_retry_after_ms)));
 			return o;
 		}
+		// A timeout or "too early" may pass on a retry; any other 4xx would fail the same way.
+		case 408:
+		case 425:
+			break;
 		default:
+			if (r.status >= 400 && r.status < 500) {
+				o.kind = outcome_kind::payload;
+				return o;
+			}
 			break;
 	}
 	o.kind = outcome_kind::transient;
@@ -273,12 +283,14 @@ void engine::send(state& s, const std::string& path, const std::string& body, bo
 		}
 		self->locked([&] {
 			auto now = self->host_->now_ms();
-			auto result = classify(r, now);
-			if (result.kind == outcome_kind::throttled) {
+			auto result = classify(r, unix_now_ms());
+			bool throttled = result.kind == outcome_kind::throttled;
+			if (throttled) {
 				self->suspended_until_ = now + result.retry_after_ms + std::llround(self->host_->random() * 2000);
 			}
-			if (result.kind == outcome_kind::transient && attempt + 1 < max_attempts) {
-				auto delay = backoff_ms(attempt, self->host_->random());
+			if ((throttled || result.kind == outcome_kind::transient) && attempt + 1 < max_attempts) {
+				// A 429 is retried once its wait is over, anything else after a backoff.
+				auto delay = throttled ? self->suspended_until_ - now : backoff_ms(attempt, self->host_->random());
 				// A retry that would outlast the next tick is dropped: that tick carries fresher data.
 				if (next_tick_ms <= 0 || delay < next_tick_ms) {
 					self->host_->schedule(delay, [weak, target, path, body, heartbeat, next_tick_ms, then, attempt] {

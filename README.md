@@ -267,7 +267,7 @@ and on the heartbeat's stats forward.
   checked per request, so a bot can gain it mid-run.
 - **Rate limits are shared.** Stats and commands share 60 requests a minute per
   client IP; heartbeats have 120. On a `429` the poster honours `Retry-After`
-  and `X-RateLimit-Reset` with one client-wide suspension that stats and
+  and `X-RateLimit-Reset` (60s without either, at most an hour) with one client-wide suspension that stats and
   commands share, while heartbeats keep going — a stale number beats a false
   "down" on your status page. Other bots behind the same egress IP count
   against you.
@@ -275,8 +275,10 @@ and on the heartbeat's stats forward.
   server listing; the publisher disables itself with reason `not-found`. A
   `401` is the bad-token case and disables every publisher. A `409` on commands
   means the listing is not set up for slash commands.
-- `5xx`, timeouts and network errors are retried up to 3 times with backoff,
-  then wait for the next tick. Requests time out after 10 seconds.
+- `408`, `425`, `5xx`, timeouts and network errors are retried up to 3 times
+  with backoff, and a `429` once its wait is over, unless the next tick comes
+  first. Any other `4xx` is reported once and not retried. Requests time out
+  after 10 seconds.
 - D++ timers tick once a second, so every delay here is whole seconds.
 - The server count is D++'s guild cache. Without `dpp::i_guilds` the cache never
   changes (the poster warns once), and a cache policy with `guild_policy =

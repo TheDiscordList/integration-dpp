@@ -209,6 +209,10 @@ void test_classify() {
 	CHECK(detail::classify(reply(409), now).kind == outcome_kind::config);
 	CHECK(detail::classify(reply(400), now).kind == outcome_kind::payload);
 	CHECK(detail::classify(reply(422), now).kind == outcome_kind::payload);
+	CHECK(detail::classify(reply(405), now).kind == outcome_kind::payload);
+	CHECK(detail::classify(reply(413), now).kind == outcome_kind::payload);
+	CHECK(detail::classify(reply(408), now).kind == outcome_kind::transient);
+	CHECK(detail::classify(reply(425), now).kind == outcome_kind::transient);
 	CHECK(detail::classify(reply(500), now).kind == outcome_kind::transient);
 	CHECK(detail::classify(reply(503), now).kind == outcome_kind::transient);
 	CHECK(detail::classify(reply(0), now).kind == outcome_kind::transient);
@@ -218,6 +222,8 @@ void test_classify() {
 	CHECK(detail::classify(reply(429, "", "junk"), now).retry_after_ms == 60'000);
 	CHECK(detail::classify(reply(429, "", "7", std::to_string(now / 1000 + 90)), now).retry_after_ms == 90'000);
 	CHECK(detail::classify(reply(429, "", "120", std::to_string(now / 1000 + 5)), now).retry_after_ms == 120'000);
+	CHECK(detail::classify(reply(429, "", "86400"), now).retry_after_ms == detail::max_retry_after_ms);
+	CHECK(detail::classify(reply(429, "", "1e300"), now).retry_after_ms == detail::max_retry_after_ms);
 
 	CHECK(detail::backoff_ms(0, 0.0) == 500);
 	CHECK(detail::backoff_ms(0, 1.0) == 1000);
@@ -505,6 +511,29 @@ void test_throttle_is_shared_but_heartbeats_bypass() {
 	CHECK(h->host->requests.back().path == "/bots/123/commands");
 }
 
+void test_throttle_is_retried_before_the_next_tick() {
+	auto h = make(only(publisher::stats));
+	h->engine->start();
+	h->host->advance(5'000);
+	h->host->respond(0, reply(429, "", "30"));
+	h->host->advance(29'999);
+	CHECK(h->host->requests.size() == 1);
+	h->host->advance(1);
+	CHECK(h->host->requests.size() == 2);
+	h->host->respond(1, reply(200));
+	CHECK(h->posted.size() == 1);
+
+	// A wait past the next tick is left to that tick.
+	auto late = make(only(publisher::stats));
+	post_result result;
+	late->engine->post(publisher::stats, [&](const post_result& r) { result = r; });
+	late->host->respond(0, reply(429, "", "600"));
+	CHECK(result.status == 429);
+	CHECK(result.skipped == "throttled");
+	late->host->advance(599'000);
+	CHECK(late->host->requests.size() == 1);
+}
+
 void test_server_errors_are_retried() {
 	auto h = make(only(publisher::stats));
 	h->engine->start();
@@ -619,6 +648,7 @@ int main() {
 	test_plan_suspends_heartbeat();
 	test_not_found_and_conflict_disable();
 	test_throttle_is_shared_but_heartbeats_bypass();
+	test_throttle_is_retried_before_the_next_tick();
 	test_server_errors_are_retried();
 	test_payload_errors_are_reported_once();
 	test_unknown_cluster_count_never_beats();
