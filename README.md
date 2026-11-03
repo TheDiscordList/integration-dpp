@@ -46,7 +46,7 @@ It starts three publishers:
 
 | Publisher | What it sends | Cadence |
 | --- | --- | --- |
-| Stats | `server_count`, `shard_count` | 5s after the first shard is ready, then every 5 min, debounced on guild join/leave |
+| Stats | `server_count`, `shard_count` | 5s after the first shard is ready or once every shard has loaded its guilds, whichever is later, then every 5 min, debounced on guild join/leave |
 | Heartbeat | per-shard status, latency and guild counts | every 30–35s, plus once when a shard becomes ready or resumes (at least 10s after the previous beat) |
 | Commands | your global slash commands | once, ~10s after ready |
 
@@ -284,6 +284,10 @@ and on the heartbeat's stats forward.
 - The server count is D++'s guild cache. Without `dpp::i_guilds` the cache never
   changes (the poster warns once), and a cache policy with `guild_policy =
   dpp::cp_none` reports 0.
+- D++ fills that cache after `READY`, one guild at a time. A shard's guild count
+  is left out of heartbeats until the shard is ready and the cache holds the
+  guilds `READY` listed (at most a minute), and stats wait for every shard, so a
+  restart cannot publish a 0 or a partial count.
 
 ## Installing
 

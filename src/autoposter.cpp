@@ -98,7 +98,7 @@ public:
 		}
 		// The guild cache is process-wide, so it is the bot-wide total only with one cluster.
 		if (cluster_ && cluster_->count == 1) {
-			return dpp::get_guild_count();
+			return detail::total_guilds(shards());
 		}
 		return std::nullopt;
 	}
@@ -134,7 +134,7 @@ public:
 				report.status = detail::shard_status(connected, !shard->sessionid.empty());
 				report.latency_ms = detail::latency_ms(shard->websocket_ping);
 				if (connected) {
-					report.guilds = guilds[id];
+					report.guilds = loaded_guilds(id, guilds[id]);
 				}
 			} else {
 				report.status = detail::shard_status(false, false);
@@ -160,7 +160,27 @@ public:
 		bot_.log(level, message);
 	}
 
+	void shard_ready(std::uint32_t id, std::uint64_t listed) {
+		std::lock_guard<std::mutex> lock(ready_mutex_);
+		ready_[id] = {listed, now_ms()};
+	}
+
 private:
+	struct ready_shard {
+		std::uint64_t listed;
+		std::int64_t at_ms;
+	};
+
+	std::optional<std::uint64_t> loaded_guilds(std::uint32_t id, std::uint64_t cached) {
+		std::lock_guard<std::mutex> lock(ready_mutex_);
+		auto ready = ready_.find(id);
+		// Absent when this poster was constructed after the shard's READY.
+		if (ready == ready_.end()) {
+			return cached;
+		}
+		return detail::loaded_guilds(cached, ready->second.listed, now_ms() - ready->second.at_ms);
+	}
+
 	dpp::cluster& bot_;
 	std::string token_;
 	std::string base_url_;
@@ -169,6 +189,8 @@ private:
 	std::optional<cluster_info> cluster_;
 	std::mutex random_mutex_;
 	std::mt19937_64 random_;
+	std::mutex ready_mutex_;
+	std::unordered_map<std::uint32_t, ready_shard> ready_;
 };
 
 }
@@ -201,6 +223,8 @@ autoposter::autoposter(dpp::cluster& bot, std::string token, options opts) : imp
 	bool has_bot_id = !opts.bot_id.empty();
 
 	auto host = std::make_unique<dpp_host>(bot, std::move(token), opts, cluster);
+	// Owned by the engine, so it lives as long as weak.lock() succeeds.
+	auto* shards = host.get();
 	impl_->engine = std::make_shared<detail::engine>(std::move(host), std::move(opts), cluster, elected);
 	std::weak_ptr<detail::engine> weak = impl_->engine;
 
@@ -209,8 +233,9 @@ autoposter::autoposter(dpp::cluster& bot, std::string token, options opts) : imp
 		impl_->engine->start_heartbeat();
 	}
 
-	impl_->ready = bot.on_ready([weak](const dpp::ready_t&) {
+	impl_->ready = bot.on_ready([weak, shards](const dpp::ready_t& event) {
 		if (auto engine = weak.lock()) {
+			shards->shard_ready(event.shard_id, event.guild_count);
 			engine->start();
 			engine->beat_now();
 		}

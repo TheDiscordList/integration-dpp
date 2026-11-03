@@ -196,6 +196,21 @@ void test_shaping() {
 	CHECK(!detail::resolve_cluster(cluster_info{0, 1025}, 0, 1));
 }
 
+void test_guilds_wait_for_the_cache_to_load() {
+	CHECK(!detail::loaded_guilds(0, 100, 1'000));
+	CHECK(!detail::loaded_guilds(99, 100, detail::guild_load_limit_ms - 1));
+	CHECK(detail::loaded_guilds(100, 100, 1'000) == 100);
+	CHECK(detail::loaded_guilds(101, 100, 1'000) == 101);
+	// A brand-new bot really is in no guilds.
+	CHECK(detail::loaded_guilds(0, 0, 0) == 0);
+	// A guild stuck unavailable must not hold the count back for good.
+	CHECK(detail::loaded_guilds(99, 100, detail::guild_load_limit_ms) == 99);
+
+	CHECK(detail::total_guilds({{0, "ready", std::nullopt, 40}, {1, "ready", std::nullopt, 2}}) == 42);
+	CHECK(!detail::total_guilds({{0, "ready", std::nullopt, 40}, {1, "connecting", std::nullopt, std::nullopt}}));
+	CHECK(!detail::total_guilds({}));
+}
+
 void test_one_shot_stops_last() {
 	std::vector<std::string> order;
 	// Like D++ 10.0's stop_timer(), stopping destroys the running callback.
@@ -696,6 +711,7 @@ void test_misconfigured_cluster_refuses_heartbeats() {
 int main() {
 	test_webhooks();
 	test_shaping();
+	test_guilds_wait_for_the_cache_to_load();
 	test_one_shot_stops_last();
 	test_classify();
 	test_stats_publisher();

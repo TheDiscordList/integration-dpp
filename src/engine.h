@@ -23,6 +23,7 @@ inline constexpr std::int64_t stats_first_post_delay_ms = 5'000;
 /** Republish an unchanged count this often, so a listing never looks abandoned. */
 inline constexpr std::int64_t stats_force_after_ms = 1'800'000;
 inline constexpr std::int64_t stats_remeasure_ms = 60'000;
+inline constexpr std::int64_t guild_load_limit_ms = 60'000;
 /** No two stats posts come closer than this, whatever options.stats.min_gap says. */
 inline constexpr std::chrono::seconds stats_min_gap_floor{60};
 inline constexpr std::int64_t heartbeat_min_interval_ms = 15'000;
@@ -69,6 +70,16 @@ struct shard_report {
 	/** Only from a ready shard: the API reads a 0 as the bot's real count. */
 	std::optional<std::uint64_t> guilds;
 };
+
+/**
+ * A shard's guild count once it can be trusted. D++ caches guilds one GUILD_CREATE at a time
+ * after READY has listed them, so until it catches up the cache understates. A guild that
+ * stays unavailable never arrives, hence the time limit.
+ */
+std::optional<std::uint64_t> loaded_guilds(std::uint64_t cached, std::uint64_t listed, std::int64_t since_ready_ms);
+
+/** nullopt while any shard's count is unknown: a partial total must not reach the listing. */
+std::optional<std::uint64_t> total_guilds(const std::vector<shard_report>& shards);
 
 /** D++ 10.0's stop_timer() deletes the callback it is called from, so stopping must come last. */
 dpp::timer_callback_t one_shot(dpp::timer_callback_t stop, std::function<void()> fire);

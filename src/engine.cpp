@@ -131,6 +131,27 @@ std::int64_t backoff_ms(int attempt, double random01) {
 	return std::llround(base * (0.5 + random01 * 0.5));
 }
 
+std::optional<std::uint64_t> loaded_guilds(std::uint64_t cached, std::uint64_t listed, std::int64_t since_ready_ms) {
+	if (cached < listed && since_ready_ms < guild_load_limit_ms) {
+		return std::nullopt;
+	}
+	return cached;
+}
+
+std::optional<std::uint64_t> total_guilds(const std::vector<shard_report>& shards) {
+	if (shards.empty()) {
+		return std::nullopt;
+	}
+	std::uint64_t total = 0;
+	for (const auto& shard : shards) {
+		if (!shard.guilds) {
+			return std::nullopt;
+		}
+		total += *shard.guilds;
+	}
+	return total;
+}
+
 dpp::timer_callback_t one_shot(dpp::timer_callback_t stop, std::function<void()> fire) {
 	return [stop = std::move(stop), fire = std::move(fire)](dpp::timer handle) {
 		fire();
@@ -543,8 +564,8 @@ void engine::publish_stats(bool manual, result_callback done) {
 	}
 	auto count = host_->server_count();
 	if (!count) {
-		warn_once("unmeasurable", "Could not measure the server count. A bot running more than one cluster must pass "
-			"options.server_count returning the bot-wide total.");
+		warn_once("unmeasurable", "The server count is not known yet, so stats are waiting. That is normal while shards "
+			"start; a bot running more than one cluster must pass options.server_count returning the bot-wide total.");
 		schedule(stats_, stats_remeasure_ms, &engine::stats_tick);
 		return finish(done, skipped("unmeasurable"));
 	}
