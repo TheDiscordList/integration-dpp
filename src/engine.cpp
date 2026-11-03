@@ -318,8 +318,8 @@ void engine::clear(state& s) {
 
 void engine::send(state& s, const std::string& path, const std::string& body, bool heartbeat, std::int64_t next_tick_ms,
 	then_fn then, int attempt) {
-	// Heartbeats bypass the suspension: a dropped stats post is a stale number, a dropped
-	// heartbeat is a false "down" on the public status page.
+	// Heartbeats have their own limiter, so they neither set nor obey the suspension: a dropped
+	// stats post is a stale number, a dropped heartbeat is a false "down" on the public status page.
 	if (!heartbeat && host_->now_ms() < suspended_until_) {
 		then(react(s, outcome{}));
 		return;
@@ -336,12 +336,16 @@ void engine::send(state& s, const std::string& path, const std::string& body, bo
 			auto now = self->host_->now_ms();
 			auto result = classify(r, unix_now_ms());
 			bool throttled = result.kind == outcome_kind::throttled;
+			std::int64_t wait = 0;
 			if (throttled) {
-				self->suspended_until_ = now + result.retry_after_ms + std::llround(self->host_->random() * 2000);
+				wait = result.retry_after_ms + std::llround(self->host_->random() * 2000);
+				if (!heartbeat) {
+					self->suspended_until_ = now + wait;
+				}
 			}
 			if ((throttled || result.kind == outcome_kind::transient) && attempt + 1 < max_attempts) {
 				// A 429 is retried once its wait is over, anything else after a backoff.
-				auto delay = throttled ? self->suspended_until_ - now : backoff_ms(attempt, self->host_->random());
+				auto delay = throttled ? wait : backoff_ms(attempt, self->host_->random());
 				// A retry that would outlast the next tick is dropped: that tick carries fresher data.
 				if (next_tick_ms <= 0 || delay < next_tick_ms) {
 					self->host_->schedule(delay, [weak, target, path, body, heartbeat, next_tick_ms, then, attempt] {

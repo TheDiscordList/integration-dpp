@@ -548,6 +548,35 @@ void test_throttle_is_shared_but_heartbeats_bypass() {
 	CHECK(h->host->requests.back().path == "/bots/123/commands");
 }
 
+void test_heartbeat_throttle_leaves_stats_and_commands_alone() {
+	options opts;
+	opts.commands.enabled = false;
+	auto h = make(opts);
+	h->engine->start();
+	h->host->advance(0);
+	CHECK(h->host->requests[0].path == "/bots/123/heartbeat");
+	h->host->respond(0, reply(429, "", "20"));
+
+	// Stats still go out on time, while the heartbeat waits out its own 429.
+	h->host->advance(5'000);
+	CHECK(h->host->requests.size() == 2);
+	CHECK(h->host->requests[1].path == "/bots/123/stats");
+	h->host->respond(1, reply(200));
+	post_result commands;
+	h->engine->post(publisher::commands, [&](const post_result& r) { commands = r; });
+	h->host->fetches.at(0)(std::string(R"([{"name":"ping","description":"Pong"}])"), "");
+	CHECK(h->host->requests.size() == 3);
+	CHECK(h->host->requests[2].path == "/bots/123/commands");
+	h->host->respond(2, reply(200));
+	CHECK(commands.ok);
+
+	h->host->advance(14'999);
+	CHECK(h->host->requests.size() == 3);
+	h->host->advance(1);
+	CHECK(h->host->requests.size() == 4);
+	CHECK(h->host->requests[3].path == "/bots/123/heartbeat");
+}
+
 void test_throttle_is_retried_before_the_next_tick() {
 	auto h = make(only(publisher::stats));
 	h->engine->start();
@@ -719,6 +748,7 @@ int main() {
 	test_plan_suspends_heartbeat();
 	test_not_found_and_conflict_disable();
 	test_throttle_is_shared_but_heartbeats_bypass();
+	test_heartbeat_throttle_leaves_stats_and_commands_alone();
 	test_throttle_is_retried_before_the_next_tick();
 	test_out_of_band_beats_keep_their_distance();
 	test_min_gap_has_a_floor();

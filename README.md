@@ -267,11 +267,12 @@ and on the heartbeat's stats forward.
 - **Heartbeats need Gold or higher.** On a `403` the heartbeat publisher
   suspends and reprobes every 30 minutes rather than disabling: the plan is
   checked per request, so a bot can gain it mid-run.
-- **Rate limits are shared.** Stats and commands share 60 requests a minute per
-  bot; heartbeats have 120. On a `429` the poster honours `Retry-After`
-  and `X-RateLimit-Reset` (60s without either, at most an hour) with one client-wide suspension that stats and
-  commands share, while heartbeats keep going — a stale number beats a false
-  "down" on your status page.
+- **Stats and commands share a rate limit** of 60 requests a minute per bot. On
+  a `429` from either the poster honours `Retry-After` and `X-RateLimit-Reset`
+  (60s without either, at most an hour) with one suspension for both. Heartbeats
+  have their own limit and ignore the suspension — a stale number beats a false
+  "down" on your status page — so a `429` on a heartbeat delays only that
+  heartbeat.
 - **`404` never means "bad token".** It means the id is unknown or belongs to a
   server listing; the publisher disables itself with reason `not-found`. A
   `401` is the bad-token case and disables every publisher. A `409` on commands

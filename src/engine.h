@@ -192,7 +192,7 @@ private:
 	bool heartbeat_started_ = false;
 	bool stopped_ = false;
 
-	/** One client-wide 429 suspension: stats and commands share one per-bot budget. */
+	/** One 429 suspension for stats and commands, which share one per-bot budget. */
 	std::int64_t suspended_until_ = 0;
 
 	state stats_{publisher::stats};
