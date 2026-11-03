@@ -162,9 +162,12 @@ nlohmann::json stats_body(std::uint64_t server_count, std::uint32_t shard_count)
 nlohmann::json heartbeat_body(const cluster_info& cluster, const std::vector<shard_report>& shards) {
 	auto list = nlohmann::json::array();
 	for (const auto& shard : shards) {
-		nlohmann::json entry = {{"id", shard.id}, {"status", shard.status}, {"guilds", shard.guilds}};
+		nlohmann::json entry = {{"id", shard.id}, {"status", shard.status}};
 		if (shard.latency_ms) {
 			entry["latency_ms"] = *shard.latency_ms;
+		}
+		if (shard.guilds) {
+			entry["guilds"] = *shard.guilds;
 		}
 		list.push_back(std::move(entry));
 	}

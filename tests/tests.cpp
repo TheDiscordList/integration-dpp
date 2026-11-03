@@ -154,13 +154,15 @@ void test_shaping() {
 	CHECK(detail::latency_ms(0.0426) == 43);
 	CHECK(detail::latency_ms(9999.0) == detail::max_latency_ms);
 
-	auto beat = detail::heartbeat_body({1, 4}, {{1, "ready", 43, 120}, {5, "connecting", std::nullopt, 0}});
+	auto beat = detail::heartbeat_body({1, 4}, {{1, "ready", 43, 120}, {5, "connecting", std::nullopt, std::nullopt}});
 	CHECK(beat["cluster"] == 1);
 	CHECK(beat["cluster_count"] == 4);
 	CHECK(beat["shards"].size() == 2);
 	CHECK(beat["shards"][0] == json::parse(R"({"id":1,"status":"ready","latency_ms":43,"guilds":120})"));
 	CHECK(!beat["shards"][1].contains("latency_ms"));
+	CHECK(!beat["shards"][1].contains("guilds"));
 	CHECK(beat["shards"][1]["status"] == "connecting");
+	CHECK(detail::heartbeat_body({0, 1}, {{0, "ready", std::nullopt, 0}})["shards"][0]["guilds"] == 0);
 
 	auto raw = R"([{"id":"1","name":"ping","description":"Pong","default_member_permissions":null,"options":[{"type":4,"name":"n","description":"d","choices":[{"name":"one","value":1}]}]}])";
 	auto commands = detail::commands_body(raw, false);

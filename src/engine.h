@@ -66,7 +66,8 @@ struct shard_report {
 	std::uint32_t id = 0;
 	std::string status;
 	std::optional<std::int64_t> latency_ms;
-	std::uint64_t guilds = 0;
+	/** Only from a ready shard: the API reads a 0 as the bot's real count. */
+	std::optional<std::uint64_t> guilds;
 };
 
 /** D++ 10.0's stop_timer() deletes the callback it is called from, so stopping must come last. */

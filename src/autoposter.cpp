@@ -129,10 +129,13 @@ public:
 		for (std::uint32_t id = bot_.cluster_id; id < total; id += bot_.maxclusters) {
 			detail::shard_report report;
 			report.id = id;
-			report.guilds = guilds[id];
 			if (auto* shard = bot_.get_shard(id)) {
-				report.status = detail::shard_status(shard->is_connected(), !shard->sessionid.empty());
+				bool connected = shard->is_connected();
+				report.status = detail::shard_status(connected, !shard->sessionid.empty());
 				report.latency_ms = detail::latency_ms(shard->websocket_ping);
+				if (connected) {
+					report.guilds = guilds[id];
+				}
 			} else {
 				report.status = detail::shard_status(false, false);
 			}
