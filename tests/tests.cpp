@@ -687,6 +687,70 @@ void test_unknown_cluster_count_never_beats() {
 	CHECK(manual(*h->engine, publisher::heartbeat).skipped == "cluster-count-unknown");
 }
 
+void test_commands_retry_until_they_land() {
+	const std::string ping = R"([{"name":"ping","description":"Pong"}])";
+	auto h = make(only(publisher::commands));
+	h->engine->start();
+	h->host->advance(10'000);
+
+	// A failed fetch from Discord.
+	h->host->fetches.at(0)(std::nullopt, "Discord 503");
+	h->host->advance(299'999);
+	CHECK(h->host->fetches.size() == 1);
+	h->host->advance(1);
+	CHECK(h->host->fetches.size() == 2);
+
+	// An unreadable list from Discord.
+	h->host->fetches.at(1)(std::string("<html>"), "");
+	h->host->advance(300'000);
+	CHECK(h->host->fetches.size() == 3);
+
+	// 5xx on every attempt.
+	h->host->fetches.at(2)(ping, "");
+	h->host->respond(0, reply(503));
+	h->host->advance(500);
+	h->host->respond(1, reply(503));
+	h->host->advance(1'000);
+	h->host->respond(2, reply(503));
+	CHECK(h->host->requests.size() == 3);
+	h->host->advance(300'000);
+	CHECK(h->host->fetches.size() == 4);
+
+	// A 429 that outlasts the retry, whose suspension then drops the next attempt unsent.
+	h->host->fetches.at(3)(ping, "");
+	h->host->respond(3, reply(429, "", "500"));
+	h->host->advance(300'000);
+	h->host->fetches.at(4)(ping, "");
+	CHECK(h->host->requests.size() == 4);
+	h->host->advance(300'000);
+	h->host->fetches.at(5)(ping, "");
+	CHECK(h->host->requests.size() == 5);
+
+	// Success ends it.
+	h->host->respond(4, reply(200));
+	CHECK(h->posted.size() == 1);
+	h->host->advance(3'600'000);
+	CHECK(h->host->fetches.size() == 6);
+
+	for (int status : {404, 409, 422}) {
+		auto terminal = make(only(publisher::commands));
+		terminal->engine->start();
+		terminal->host->advance(10'000);
+		terminal->host->fetches.at(0)(ping, "");
+		terminal->host->respond(0, reply(status));
+		terminal->host->advance(3'600'000);
+		CHECK(terminal->host->fetches.size() == 1);
+	}
+
+	// options.commands.enabled = false means it never runs on its own.
+	options off = only(publisher::stats);
+	auto manual_only = make(off);
+	CHECK(manual(*manual_only->engine, publisher::commands).skipped == "pending");
+	manual_only->host->fetches.at(0)(std::nullopt, "Discord 503");
+	manual_only->host->advance(3'600'000);
+	CHECK(manual_only->host->fetches.size() == 1);
+}
+
 void test_bot_id_is_fetched_from_the_application() {
 	options opts;
 	opts.stats.enabled = false;
@@ -793,6 +857,7 @@ int main() {
 	test_server_errors_are_retried();
 	test_payload_errors_are_reported_once();
 	test_unknown_cluster_count_never_beats();
+	test_commands_retry_until_they_land();
 	test_bot_id_is_fetched_from_the_application();
 	test_commands_skip_empty_and_non_elected();
 	test_missing_token_is_inert();

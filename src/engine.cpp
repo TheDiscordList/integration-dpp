@@ -364,6 +364,19 @@ void engine::send(state& s, const std::string& path, const std::string& body, bo
 }
 
 post_result engine::react(state& s, const outcome& o) {
+	if (s.kind == publisher::commands) {
+		switch (o.kind) {
+			case outcome_kind::transient:
+			case outcome_kind::throttled:
+			case outcome_kind::dropped:
+			case outcome_kind::plan:
+				retry_commands();
+				break;
+			default:
+				clear(s);
+				break;
+		}
+	}
 	switch (o.kind) {
 		case outcome_kind::ok:
 			if (s.kind == publisher::heartbeat) {
@@ -697,6 +710,14 @@ void engine::commands_tick() {
 	publish_commands({});
 }
 
+// The only cadence commands have: they post once on success, because they change on deploy and a
+// deploy is a restart.
+void engine::retry_commands() {
+	if (opts_.commands.enabled && !commands_.disabled) {
+		schedule(commands_, commands_retry_ms, &engine::commands_tick);
+	}
+}
+
 void engine::publish_commands(result_callback done) {
 	if (commands_.disabled) {
 		return finish(done, skipped("disabled"));
@@ -705,6 +726,7 @@ void engine::publish_commands(result_callback done) {
 		return finish(done, skipped("not-elected"));
 	}
 	if (host_->now_ms() < commands_.plan_until) {
+		retry_commands();
 		return finish(done, skipped("plan"));
 	}
 	if (commands_.in_flight) {
@@ -727,18 +749,20 @@ void engine::publish_commands(result_callback done) {
 			s.in_flight = false;
 			if (!raw) {
 				self->emit_error(s, 0, "Could not fetch the global application commands from Discord: " + error, false);
+				self->retry_commands();
 				return self->finish(done, skipped("fetch-failed"));
 			}
 			auto payload = commands_body(*raw, self->opts_.commands.post_empty);
 			if (!payload.body) {
 				if (payload.skipped == "fetch-failed") {
 					self->emit_error(s, 0, "Discord returned an unreadable command list.", false);
+					self->retry_commands();
 				}
 				return self->finish(done, {false, 0, payload.skipped});
 			}
 			s.in_flight = true;
 			auto* engine = self.get();
-			self->send(s, "/bots/" + id + "/commands", payload.body->dump(), false, 0,
+			self->send(s, "/bots/" + id + "/commands", payload.body->dump(), false, commands_retry_ms,
 				[engine, done](const post_result& result) {
 					engine->commands_.in_flight = false;
 					engine->finish(done, result);

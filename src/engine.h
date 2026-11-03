@@ -33,6 +33,7 @@ inline constexpr std::int64_t heartbeat_jitter_ms = 5'000;
 inline constexpr std::int64_t heartbeat_soon_gap_ms = 10'000;
 /** Offset from the first stats post: the two share one server-side rate budget. */
 inline constexpr std::int64_t commands_delay_ms = 10'000;
+inline constexpr std::int64_t commands_retry_ms = 300'000;
 /** The Gold tier is derived per request, so a bot can gain it mid-run. */
 inline constexpr std::int64_t plan_reprobe_ms = 1'800'000;
 inline constexpr std::int64_t max_latency_ms = 600'000;
@@ -183,6 +184,7 @@ private:
 	void retune(const nlohmann::json& body);
 	void commands_tick();
 	void publish_commands(result_callback done);
+	void retry_commands();
 
 	std::unique_ptr<host> host_;
 	options opts_;
