@@ -318,6 +318,10 @@ void engine::clear(state& s) {
 
 void engine::send(state& s, const std::string& path, const std::string& body, bool heartbeat, std::int64_t next_tick_ms,
 	then_fn then, int attempt) {
+	if (stopped_ && attempt > 0) {
+		then(skipped("stopped"));
+		return;
+	}
 	// Heartbeats have their own limiter, so they neither set nor obey the suspension: a dropped
 	// stats post is a stale number, a dropped heartbeat is a false "down" on the public status page.
 	if (!heartbeat && host_->now_ms() < suspended_until_) {

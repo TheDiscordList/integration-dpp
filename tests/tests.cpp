@@ -660,6 +660,17 @@ void test_server_errors_are_retried() {
 	CHECK(h->disabled.empty());
 }
 
+void test_stop_ends_a_pending_retry() {
+	auto h = make(only(publisher::stats));
+	post_result result;
+	h->engine->post(publisher::stats, [&](const post_result& r) { result = r; });
+	h->host->respond(0, reply(503));
+	h->engine->stop();
+	h->host->advance(10'000);
+	CHECK(h->host->requests.size() == 1);
+	CHECK(result.skipped == "stopped");
+}
+
 void test_payload_errors_are_reported_once() {
 	auto h = make(only(publisher::stats));
 	h->engine->start();
@@ -855,6 +866,7 @@ int main() {
 	test_out_of_band_beats_keep_their_distance();
 	test_min_gap_has_a_floor();
 	test_server_errors_are_retried();
+	test_stop_ends_a_pending_retry();
 	test_payload_errors_are_reported_once();
 	test_unknown_cluster_count_never_beats();
 	test_commands_retry_until_they_land();
