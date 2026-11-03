@@ -42,10 +42,7 @@ public:
 	std::uint64_t schedule(std::int64_t delay_ms, std::function<void()> fn) override {
 		dpp::cluster* bot = &bot_;
 		auto seconds = static_cast<std::uint64_t>(std::max<std::int64_t>(1, (delay_ms + 999) / 1000));
-		return bot_.start_timer([bot, fn = std::move(fn)](dpp::timer handle) {
-			bot->stop_timer(handle);
-			fn();
-		}, seconds);
+		return bot_.start_timer(detail::one_shot([bot](dpp::timer handle) { bot->stop_timer(handle); }, std::move(fn)), seconds);
 	}
 
 	void cancel(std::uint64_t handle) override {
@@ -57,15 +54,14 @@ public:
 	void send(const std::string& path, const std::string& body, std::function<void(const detail::response&)> done) override {
 		dpp::cluster* bot = &bot_;
 		auto settled = std::make_shared<std::atomic<bool>>(false);
-		auto timeout = bot_.start_timer([bot, settled, done](dpp::timer handle) {
-			bot->stop_timer(handle);
+		auto timeout = bot_.start_timer(detail::one_shot([bot](dpp::timer handle) { bot->stop_timer(handle); }, [settled, done] {
 			if (settled->exchange(true)) {
 				return;
 			}
 			detail::response r;
 			r.error = "No response from TheDiscordList within 10 seconds.";
 			done(r);
-		}, request_timeout_seconds);
+		}), request_timeout_seconds);
 
 		bot_.request(base_url_ + path, dpp::m_post, [bot, settled, timeout, done](const dpp::http_request_completion_t& http) {
 			if (settled->exchange(true)) {

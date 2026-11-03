@@ -131,6 +131,13 @@ std::int64_t backoff_ms(int attempt, double random01) {
 	return std::llround(base * (0.5 + random01 * 0.5));
 }
 
+dpp::timer_callback_t one_shot(dpp::timer_callback_t stop, std::function<void()> fire) {
+	return [stop = std::move(stop), fire = std::move(fire)](dpp::timer handle) {
+		fire();
+		stop(handle);
+	};
+}
+
 std::string shard_status(bool connected, bool has_session) {
 	if (connected) {
 		return "ready";

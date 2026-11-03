@@ -194,6 +194,18 @@ void test_shaping() {
 	CHECK(!detail::resolve_cluster(cluster_info{0, 1025}, 0, 1));
 }
 
+void test_one_shot_stops_last() {
+	std::vector<std::string> order;
+	// Like D++ 10.0's stop_timer(), stopping destroys the running callback.
+	dpp::timer_callback_t timer;
+	timer = detail::one_shot([&](dpp::timer) {
+		order.emplace_back("stop");
+		timer = nullptr;
+	}, [&] { order.emplace_back("fire"); });
+	timer(1);
+	CHECK((order == std::vector<std::string>{"fire", "stop"}));
+}
+
 detail::response reply(int status, std::string body = "", std::string retry_after = "", std::string reset = "") {
 	detail::response r;
 	r.status = status;
@@ -682,6 +694,7 @@ void test_misconfigured_cluster_refuses_heartbeats() {
 int main() {
 	test_webhooks();
 	test_shaping();
+	test_one_shot_stops_last();
 	test_classify();
 	test_stats_publisher();
 	test_unauthorized_disables_everything();

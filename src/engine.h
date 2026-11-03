@@ -69,6 +69,9 @@ struct shard_report {
 	std::uint64_t guilds = 0;
 };
 
+/** D++ 10.0's stop_timer() deletes the callback it is called from, so stopping must come last. */
+dpp::timer_callback_t one_shot(dpp::timer_callback_t stop, std::function<void()> fire);
+
 std::string shard_status(bool connected, bool has_session);
 std::optional<std::int64_t> latency_ms(double websocket_ping_seconds);
 
