@@ -130,8 +130,8 @@ thediscordlist::autoposter poster(bot, token, options);
 `min_gap` is a hard floor between two stats POSTs and is never below 60
 seconds. A join storm, a mass reconnect and a manual `post_stats()` all route
 through it, so the ceiling is structurally one request per minute. An unchanged
-count is not re-sent for 30 minutes: every stats post re-indexes the listing
-and fires a webhook.
+count is not re-sent for 30 minutes: the server treats it as a no-op, so
+re-sending it only spends rate budget.
 
 `commands.post_empty` is `false` because posting an empty list **clears** the
 commands on your listing. Turn it on only if that is what you mean.

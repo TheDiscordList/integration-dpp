@@ -631,7 +631,7 @@ void engine::publish_stats(bool manual, result_callback done) {
 	}
 
 	auto shard_count = host_->shard_count();
-	// Every stats post re-indexes the listing and fires a webhook, even for the same number.
+	// The server treats an unchanged count as a no-op, so re-sending one only spends rate budget.
 	if (count == last_count_ && shard_count == last_shard_count_ && now < last_post_at_ + stats_force_after_ms) {
 		schedule(stats_, interval, &engine::stats_tick);
 		return finish(done, skipped("unchanged"));
