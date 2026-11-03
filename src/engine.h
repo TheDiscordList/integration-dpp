@@ -37,7 +37,12 @@ inline constexpr std::int64_t commands_retry_ms = 300'000;
 /** The Gold tier is derived per request, so a bot can gain it mid-run. */
 inline constexpr std::int64_t plan_reprobe_ms = 1'800'000;
 inline constexpr std::int64_t max_latency_ms = 600'000;
+inline constexpr std::int64_t default_retry_after_ms = 60'000;
 inline constexpr std::int64_t max_retry_after_ms = 3'600'000;
+inline constexpr std::int64_t retry_jitter_ms = 2'000;
+inline constexpr std::int64_t backoff_base_ms = 1'000;
+inline constexpr std::int64_t backoff_max_ms = 30'000;
+inline constexpr std::uint64_t request_timeout_seconds = 10;
 inline constexpr int max_attempts = 3;
 inline constexpr const char* content_type = "application/json";
 

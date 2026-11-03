@@ -100,7 +100,7 @@ outcome classify(const response& r, std::int64_t unix_ms) {
 		case 429: {
 			o.kind = outcome_kind::throttled;
 			auto seconds = parse_number(r.retry_after);
-			double wait_ms = seconds && *seconds > 0 ? *seconds * 1000 : 60'000.0;
+			double wait_ms = seconds && *seconds > 0 ? *seconds * 1000 : static_cast<double>(default_retry_after_ms);
 			auto reset = parse_number(r.ratelimit_reset);
 			if (reset && *reset > 0) {
 				wait_ms = std::max(wait_ms, *reset * 1000 - static_cast<double>(unix_ms));
@@ -127,7 +127,7 @@ outcome classify(const response& r, std::int64_t unix_ms) {
 }
 
 std::int64_t backoff_ms(int attempt, double random01) {
-	double base = std::min(1000.0 * std::pow(2.0, attempt), 30'000.0);
+	double base = std::min(static_cast<double>(backoff_base_ms) * std::pow(2.0, attempt), static_cast<double>(backoff_max_ms));
 	return std::llround(base * (0.5 + random01 * 0.5));
 }
 
@@ -342,7 +342,7 @@ void engine::send(state& s, const std::string& path, const std::string& body, bo
 			bool throttled = result.kind == outcome_kind::throttled;
 			std::int64_t wait = 0;
 			if (throttled) {
-				wait = result.retry_after_ms + std::llround(self->host_->random() * 2000);
+				wait = result.retry_after_ms + std::llround(self->host_->random() * retry_jitter_ms);
 				if (!heartbeat) {
 					self->suspended_until_ = now + wait;
 				}

@@ -9,7 +9,6 @@ namespace thediscordlist {
 
 namespace {
 
-constexpr std::uint64_t request_timeout_seconds = 10;
 /** Above this, numshards is D++ 10.1's NO_SHARDS sentinel for a gateway-less cluster. */
 constexpr std::uint32_t max_shards = 65536;
 
@@ -61,7 +60,7 @@ public:
 			detail::response r;
 			r.error = "No response from TheDiscordList within 10 seconds.";
 			done(r);
-		}), request_timeout_seconds);
+		}), detail::request_timeout_seconds);
 
 		bot_.request(base_url_ + path, dpp::m_post, [bot, settled, timeout, done](const dpp::http_request_completion_t& http) {
 			if (settled->exchange(true)) {

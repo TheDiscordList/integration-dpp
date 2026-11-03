@@ -3,6 +3,7 @@
 #include <openssl/evp.h>
 #include <openssl/hmac.h>
 
+#include <algorithm>
 #include <cctype>
 #include <cstdio>
 #include <fstream>
@@ -135,6 +136,59 @@ void test_webhooks() {
 		vector_secret, default_webhook_tolerance, vector_t);
 	CHECK(ready.event == "listing.bump_ready");
 	CHECK(ready.data["ready_at"] == "2026-10-18T12:00:00+00:00");
+}
+
+// tests/fixtures/sdk-conformance.json is shared byte-for-byte by every TheDiscordList SDK.
+void test_conformance() {
+	std::ifstream file(THEDISCORDLIST_DPP_CONFORMANCE_FIXTURE);
+	auto fixture = json::parse(file, nullptr, false);
+	CHECK(fixture.is_object());
+	if (!fixture.is_object()) {
+		return;
+	}
+
+	const auto& signature = fixture["webhook_signature"];
+	const auto secret = signature["secret"].get<std::string>();
+	CHECK(!signature["vectors"].empty());
+	for (const auto& vector : signature["vectors"]) {
+		bool valid = !verify_error(vector["body"].get<std::string>(), vector["header"].get<std::string>(), secret,
+			vector["now"].get<std::time_t>());
+		if (valid != vector["valid"].get<bool>()) {
+			std::fprintf(stderr, "vector \"%s\" came out %s\n", vector["name"].get<std::string>().c_str(), valid ? "valid" : "invalid");
+		}
+		CHECK(valid == vector["valid"].get<bool>());
+	}
+
+	const auto& d = fixture["defaults"];
+	const auto ms = [](const json& seconds) { return seconds.get<std::int64_t>() * 1000; };
+	options defaults;
+	CHECK(signature["tolerance_seconds"] == default_webhook_tolerance.count());
+	CHECK(d["base_url"] == default_base_url);
+	CHECK(d["base_url"] == defaults.base_url);
+	CHECK(d["timeout_seconds"] == detail::request_timeout_seconds);
+	CHECK(d["retry"]["attempts"] == detail::max_attempts);
+	CHECK(ms(d["retry"]["backoff_base_seconds"]) == detail::backoff_base_ms);
+	CHECK(ms(d["retry"]["backoff_max_seconds"]) == detail::backoff_max_ms);
+	CHECK(ms(d["rate_limit"]["default_seconds"]) == detail::default_retry_after_ms);
+	CHECK(ms(d["rate_limit"]["max_seconds"]) == detail::max_retry_after_ms);
+	CHECK(ms(d["rate_limit"]["jitter_max_seconds"]) == detail::retry_jitter_ms);
+	CHECK(ms(d["forbidden_reprobe_seconds"]) == detail::plan_reprobe_ms);
+	CHECK(ms(d["stats"]["first_delay_seconds"]) == detail::stats_first_post_delay_ms);
+	CHECK(d["stats"]["interval_seconds"] == defaults.stats.interval.count());
+	CHECK(d["stats"]["debounce_seconds"] == defaults.stats.debounce.count());
+	CHECK(d["stats"]["min_gap_seconds"] == defaults.stats.min_gap.count());
+	CHECK(d["stats"]["min_gap_seconds"] == detail::stats_min_gap_floor.count());
+	CHECK(ms(d["stats"]["force_after_seconds"]) == detail::stats_force_after_ms);
+	CHECK(d["heartbeat"]["interval_seconds"] == defaults.heartbeat.interval.count());
+	CHECK(ms(d["heartbeat"]["jitter_max_seconds"]) == detail::heartbeat_jitter_ms);
+	CHECK(ms(d["commands"]["first_delay_seconds"]) == detail::commands_delay_ms);
+	CHECK(ms(d["commands"]["retry_seconds"]) == detail::commands_retry_ms);
+
+	// The states a shard actually reports: D++ gives no way to tell one is down for good.
+	const auto& states = fixture["shard_states"];
+	for (const auto& state : {detail::shard_status(true, true), detail::shard_status(false, true), detail::shard_status(false, false)}) {
+		CHECK(std::find(states.begin(), states.end(), json(state)) != states.end());
+	}
 }
 
 // ---------------------------------------------------------------------------------------
@@ -852,6 +906,7 @@ void test_misconfigured_cluster_refuses_heartbeats() {
 
 int main() {
 	test_webhooks();
+	test_conformance();
 	test_shaping();
 	test_guilds_wait_for_the_cache_to_load();
 	test_one_shot_stops_last();
