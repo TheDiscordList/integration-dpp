@@ -4,7 +4,8 @@
  * TheDiscordList integration for D++.
  *
  *     dpp::cluster bot(std::getenv("DISCORD_TOKEN"));
- *     thediscordlist::autoposter poster(bot, std::getenv("TDL_TOKEN"));
+ *     const char* tdl_token = std::getenv("TDL_TOKEN");
+ *     thediscordlist::autoposter poster(bot, tdl_token ? tdl_token : "");
  *     bot.start(dpp::st_wait);
  */
 

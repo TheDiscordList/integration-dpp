@@ -70,7 +70,7 @@ cluster_id, maxclusters)` — so nothing has to be guessed:
 
 | Setup | `server_count` comes from | Stats and commands posted by | Heartbeats |
 | --- | --- | --- | --- |
-| One process, any number of shards | `dpp::get_guild_count()` | this process | this process, cluster 0 of 1 |
+| One process, any number of shards | the guild cache, once every shard has loaded | this process | this process, cluster 0 of 1 |
 | `maxclusters > 1`, one process per cluster | your `options.server_count` | cluster 0 | every cluster, for itself |
 
 Each heartbeat carries `cluster_id` and `maxclusters` as `cluster` and
@@ -94,7 +94,8 @@ options.server_count = []() -> std::optional<std::uint64_t> {
 ```
 
 Without it, cluster 0 logs a warning and posts no stats rather than a partial
-number.
+number. The callback runs on the thread that drives D++'s gateway connections,
+so return a value you refresh elsewhere rather than waiting on a network call.
 
 > **If the cluster count is invalid, heartbeats do not start.** The API
 > hard-deletes every cluster row whose id is `>= cluster_count` in the request,
