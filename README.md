@@ -304,7 +304,7 @@ and on the heartbeat's stats forward.
 include(FetchContent)
 FetchContent_Declare(thediscordlist-dpp
     GIT_REPOSITORY https://github.com/TheDiscordList/integration-dpp.git
-    GIT_TAG v0.2.0)
+    GIT_TAG v0.2.1)
 FetchContent_MakeAvailable(thediscordlist-dpp)
 
 target_link_libraries(bot PRIVATE thediscordlist::dpp)
@@ -351,7 +351,7 @@ Every release:
    `find_package` version in `examples/CMakeLists.txt` with a minor release:
    CI builds the example against the installed package and fails on a
    mismatch.
-2. `git tag v0.2.0 && git push origin v0.2.0`. The workflow builds, tests,
+2. `git tag v0.2.1 && git push origin v0.2.1`. The workflow builds, tests,
    attaches a source tarball and prints the vcpkg `SHA512` of the tag archive in
    the release notes.
 3. In the vcpkg fork, copy `ports/thediscordlist-dpp` to `ports/` and replace

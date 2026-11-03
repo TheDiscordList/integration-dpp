@@ -1,5 +1,23 @@
 # Changelog
 
+## 0.2.1 - 2026-11-03
+
+- A one-shot timer no longer uses its own callback after stopping it, which is a
+  use-after-free on D++ 10.0, where `stop_timer()` deletes the running callback.
+- Heartbeats omit a shard's `guilds` until the shard is ready and D++ has cached
+  the guilds `READY` listed, and stats wait for every shard, so a restart cannot
+  publish a 0 or a partial count.
+- The bot id defaults to the application id fetched from Discord instead of
+  `bot.me.id`, which gave older bots a `404` that disabled the publisher.
+  Commands are fetched with it too, rather than through `global_commands_get()`.
+- Commands are retried every 5 minutes after a `5xx`, a `429` or a failed fetch
+  from Discord, until they post or get a terminal `4xx`.
+- A `429` on a heartbeat no longer suspends stats and commands, whose limit is
+  separate.
+- `stop()` also ends a pending retry, which now reports `stopped`.
+- The release workflow pins its actions to commit SHAs and refuses a tag that is
+  not on `main`.
+
 ## 0.2.0 - 2026-10-18
 
 - `verify_webhook` fails closed on an empty secret with the new

@@ -1,7 +1,7 @@
 cmake_minimum_required(VERSION 3.16)
 
 project(thediscordlist-dpp
-	VERSION 0.2.0
+	VERSION 0.2.1
 	DESCRIPTION "Official TheDiscordList integration for D++"
 	HOMEPAGE_URL "https://thediscordlist.com"
 	LANGUAGES CXX)
