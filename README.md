@@ -354,12 +354,17 @@ Every release:
 2. `git tag v0.2.1 && git push origin v0.2.1`. The workflow builds, tests,
    attaches a source tarball and prints the vcpkg `SHA512` of the tag archive in
    the release notes.
-3. In the vcpkg fork, copy `ports/thediscordlist-dpp` to `ports/` and replace
-   `SHA512 0` in `portfile.cmake` with the hash from the release notes.
-4. `./vcpkg install thediscordlist-dpp` to check it builds, then
+3. Pin the port: replace `SHA512` in `ports/thediscordlist-dpp/portfile.cmake`
+   with the hash from the release notes, and commit that to `main` as
+   `Pin the vcpkg port to v0.2.1`. The hash only exists once the tag does, so
+   from the version bump until this commit `--overlay-ports` fails on a hash
+   mismatch: `REF` follows the new version while `SHA512` is still the previous
+   tag's.
+4. In the vcpkg fork, copy the pinned `ports/thediscordlist-dpp` to `ports/`.
+5. `./vcpkg install thediscordlist-dpp` to check it builds, then
    `./vcpkg format-manifest ports/thediscordlist-dpp/vcpkg.json` and
    `./vcpkg x-add-version thediscordlist-dpp`.
-5. Commit `ports/thediscordlist-dpp` and `versions/`, and open a PR against
+6. Commit `ports/thediscordlist-dpp` and `versions/`, and open a PR against
    `microsoft/vcpkg` titled `[thediscordlist-dpp] new port` (later:
    `[thediscordlist-dpp] update to X.Y.Z`).
 
