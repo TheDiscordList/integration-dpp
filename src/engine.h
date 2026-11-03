@@ -115,11 +115,14 @@ public:
 	virtual std::uint64_t schedule(std::int64_t delay_ms, std::function<void()> fn) = 0;
 	virtual void cancel(std::uint64_t handle) = 0;
 	virtual void send(const std::string& path, const std::string& body, std::function<void(const response&)> done) = 0;
+	/** options.bot_id. When it is empty the engine fetches the application id instead. */
 	virtual std::string bot_id() = 0;
+	virtual void fetch_application_id(std::function<void(std::optional<std::string> id, const std::string& error)> done) = 0;
 	virtual std::optional<std::uint64_t> server_count() = 0;
 	virtual std::uint32_t shard_count() = 0;
 	virtual std::vector<shard_report> shards() = 0;
-	virtual void fetch_commands(std::function<void(std::optional<std::string> body, const std::string& error)> done) = 0;
+	virtual void fetch_commands(const std::string& application_id,
+		std::function<void(std::optional<std::string> body, const std::string& error)> done) = 0;
 	virtual void log(dpp::loglevel level, const std::string& message) = 0;
 };
 
@@ -168,6 +171,9 @@ private:
 	void report_once(state& s, int status, const std::string& message);
 	void emit_error(state& s, int status, const std::string& message, bool retryable);
 
+	std::string bot_id();
+	void begin();
+	void resolve_bot_id();
 	void begin_heartbeat();
 	void stats_tick();
 	void publish_stats(bool manual, result_callback done);
@@ -191,6 +197,8 @@ private:
 	bool started_ = false;
 	bool heartbeat_started_ = false;
 	bool stopped_ = false;
+	std::string application_id_;
+	bool resolving_bot_id_ = false;
 
 	/** One 429 suspension for stats and commands, which share one per-bot budget. */
 	std::int64_t suspended_until_ = 0;

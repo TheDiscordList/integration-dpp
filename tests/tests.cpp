@@ -290,6 +290,8 @@ struct fake_host final : detail::host {
 	std::vector<timer> timers;
 	std::vector<request> requests;
 	std::vector<std::function<void(std::optional<std::string>, const std::string&)>> fetches;
+	std::vector<std::function<void(std::optional<std::string>, const std::string&)>> application_fetches;
+	std::vector<std::string> fetched_for;
 	std::string id = "123";
 	std::optional<std::uint64_t> count = 42;
 	std::vector<detail::shard_report> shard_list = {{0, "ready", 40, 42}};
@@ -314,7 +316,11 @@ struct fake_host final : detail::host {
 	std::optional<std::uint64_t> server_count() override { return count; }
 	std::uint32_t shard_count() override { return 2; }
 	std::vector<detail::shard_report> shards() override { return shard_list; }
-	void fetch_commands(std::function<void(std::optional<std::string>, const std::string&)> done) override {
+	void fetch_application_id(std::function<void(std::optional<std::string>, const std::string&)> done) override {
+		application_fetches.push_back(std::move(done));
+	}
+	void fetch_commands(const std::string& application_id, std::function<void(std::optional<std::string>, const std::string&)> done) override {
+		fetched_for.push_back(application_id);
 		fetches.push_back(std::move(done));
 	}
 	void log(dpp::loglevel, const std::string&) override {}
@@ -681,6 +687,38 @@ void test_unknown_cluster_count_never_beats() {
 	CHECK(manual(*h->engine, publisher::heartbeat).skipped == "cluster-count-unknown");
 }
 
+void test_bot_id_is_fetched_from_the_application() {
+	options opts;
+	opts.stats.enabled = false;
+	auto h = make(opts);
+	h->host->id = "";
+
+	// One fetch however many shards report READY, and nothing posts until it answers.
+	h->engine->start();
+	h->engine->start();
+	CHECK(h->host->application_fetches.size() == 1);
+	h->host->advance(30'000);
+	CHECK(h->host->requests.empty());
+
+	// A failure is retried; the bot user's id is never a stand-in, since that is the 404.
+	h->host->application_fetches[0](std::nullopt, "Discord is down");
+	h->host->advance(59'999);
+	CHECK(h->host->application_fetches.size() == 1);
+	h->host->advance(1);
+	CHECK(h->host->application_fetches.size() == 2);
+
+	h->host->application_fetches[1](std::string("999"), "");
+	h->host->advance(0);
+	CHECK(h->host->requests.size() == 1);
+	CHECK(h->host->requests[0].path == "/bots/999/heartbeat");
+
+	h->host->advance(10'000);
+	CHECK(h->host->fetched_for.size() == 1);
+	CHECK(h->host->fetched_for[0] == "999");
+	h->host->fetches[0](std::string(R"([{"name":"ping","description":"Pong"}])"), "");
+	CHECK(h->host->requests.back().path == "/bots/999/commands");
+}
+
 void test_commands_skip_empty_and_non_elected() {
 	auto h = make(only(publisher::commands));
 	h->engine->start();
@@ -755,6 +793,7 @@ int main() {
 	test_server_errors_are_retried();
 	test_payload_errors_are_reported_once();
 	test_unknown_cluster_count_never_beats();
+	test_bot_id_is_fetched_from_the_application();
 	test_commands_skip_empty_and_non_elected();
 	test_missing_token_is_inert();
 	test_misconfigured_cluster_refuses_heartbeats();

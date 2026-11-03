@@ -49,7 +49,7 @@ struct cluster_info {
 };
 
 struct options {
-	/** Discord application id. Default: bot.me.id once the first shard is ready. */
+	/** Discord application id. Default: fetched from Discord once the first shard is ready. */
 	std::string bot_id;
 	std::string base_url = default_base_url;
 

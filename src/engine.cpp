@@ -458,22 +458,61 @@ void engine::begin_heartbeat() {
 }
 
 void engine::start() {
-	locked([&] {
-		if (stopped_ || started_) {
+	locked([&] { begin(); });
+}
+
+std::string engine::bot_id() {
+	return application_id_.empty() ? host_->bot_id() : application_id_;
+}
+
+void engine::begin() {
+	if (stopped_ || started_) {
+		return;
+	}
+	if (bot_id().empty()) {
+		return resolve_bot_id();
+	}
+	started_ = true;
+	if (cluster_) {
+		log(dpp::ll_info, "Publishing as cluster " + std::to_string(cluster_->id) + " of " +
+			std::to_string(cluster_->count) + ".");
+	}
+	begin_heartbeat();
+	if (opts_.stats.enabled && elected_) {
+		schedule(stats_, stats_first_post_delay_ms, &engine::stats_tick);
+	}
+	if (opts_.commands.enabled && elected_) {
+		schedule(commands_, commands_delay_ms, &engine::commands_tick);
+	}
+}
+
+// D++ only keeps the bot user's id, which differs from the application id on older bots, and
+// TheDiscordList would answer those with a 404 that disables the publisher.
+void engine::resolve_bot_id() {
+	if (resolving_bot_id_) {
+		return;
+	}
+	resolving_bot_id_ = true;
+	std::weak_ptr<engine> weak = weak_from_this();
+	host_->fetch_application_id([weak](std::optional<std::string> id, const std::string& error) {
+		auto self = weak.lock();
+		if (!self) {
 			return;
 		}
-		started_ = true;
-		if (cluster_) {
-			log(dpp::ll_info, "Publishing as cluster " + std::to_string(cluster_->id) + " of " +
-				std::to_string(cluster_->count) + ".");
-		}
-		begin_heartbeat();
-		if (opts_.stats.enabled && elected_) {
-			schedule(stats_, stats_first_post_delay_ms, &engine::stats_tick);
-		}
-		if (opts_.commands.enabled && elected_) {
-			schedule(commands_, commands_delay_ms, &engine::commands_tick);
-		}
+		self->locked([&] {
+			self->resolving_bot_id_ = false;
+			if (id && !id->empty()) {
+				self->application_id_ = *id;
+				return self->begin();
+			}
+			self->warn_once("no-application-id", "Could not fetch the application id from Discord, so nothing is posted "
+				"yet (" + error + "). Retrying every minute; options.bot_id skips this.");
+			self->host_->schedule(stats_remeasure_ms, [weak] {
+				if (auto again = weak.lock()) {
+					again->start();
+				}
+			});
+		});
 	});
 }
 
@@ -560,8 +599,8 @@ void engine::publish_stats(bool manual, result_callback done) {
 		return finish(done, skipped("min-gap"));
 	}
 
-	auto bot_id = host_->bot_id();
-	if (bot_id.empty()) {
+	auto id = bot_id();
+	if (id.empty()) {
 		warn_once("no-bot-id", "The bot id is not known yet. Pass options.bot_id, or wait for the first shard to be ready.");
 		schedule(stats_, stats_remeasure_ms, &engine::stats_tick);
 		return finish(done, skipped("no-bot-id"));
@@ -583,7 +622,7 @@ void engine::publish_stats(bool manual, result_callback done) {
 
 	last_post_at_ = now;
 	stats_.in_flight = true;
-	send(stats_, "/bots/" + bot_id + "/stats", stats_body(*count, shard_count).dump(), false, interval,
+	send(stats_, "/bots/" + id + "/stats", stats_body(*count, shard_count).dump(), false, interval,
 		[this, count, shard_count, interval, done](const post_result& result) {
 			stats_.in_flight = false;
 			if (result.ok) {
@@ -612,19 +651,19 @@ void engine::beat(bool manual, result_callback done) {
 		return finish(done, skipped("in-flight"));
 	}
 
-	auto bot_id = host_->bot_id();
-	auto shards = bot_id.empty() ? std::vector<shard_report>{} : host_->shards();
+	auto id = bot_id();
+	auto shards = id.empty() ? std::vector<shard_report>{} : host_->shards();
 	// Before login. The API requires at least one shard.
 	if (shards.empty()) {
 		if (!manual && heartbeat_started_) {
 			schedule_next_beat();
 		}
-		return finish(done, skipped(bot_id.empty() ? "no-bot-id" : "no-shards"));
+		return finish(done, skipped(id.empty() ? "no-bot-id" : "no-shards"));
 	}
 
 	heartbeat_.in_flight = true;
 	last_beat_at_ = host_->now_ms();
-	send(heartbeat_, "/bots/" + bot_id + "/heartbeat", heartbeat_body(*cluster_, shards).dump(), true,
+	send(heartbeat_, "/bots/" + id + "/heartbeat", heartbeat_body(*cluster_, shards).dump(), true,
 		heartbeat_interval_ms_, [this, manual, done](const post_result& result) {
 			heartbeat_.in_flight = false;
 			// A manual beat revives a loop that died with a disable.
@@ -671,14 +710,14 @@ void engine::publish_commands(result_callback done) {
 	if (commands_.in_flight) {
 		return finish(done, skipped("in-flight"));
 	}
-	auto bot_id = host_->bot_id();
-	if (bot_id.empty()) {
+	auto id = bot_id();
+	if (id.empty()) {
 		return finish(done, skipped("no-bot-id"));
 	}
 
 	commands_.in_flight = true;
 	std::weak_ptr<engine> weak = weak_from_this();
-	host_->fetch_commands([weak, bot_id, done](std::optional<std::string> raw, const std::string& error) {
+	host_->fetch_commands(id, [weak, id, done](std::optional<std::string> raw, const std::string& error) {
 		auto self = weak.lock();
 		if (!self) {
 			return;
@@ -699,7 +738,7 @@ void engine::publish_commands(result_callback done) {
 			}
 			s.in_flight = true;
 			auto* engine = self.get();
-			self->send(s, "/bots/" + bot_id + "/commands", payload.body->dump(), false, 0,
+			self->send(s, "/bots/" + id + "/commands", payload.body->dump(), false, 0,
 				[engine, done](const post_result& result) {
 					engine->commands_.in_flight = false;
 					engine->finish(done, result);

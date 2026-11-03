@@ -107,7 +107,7 @@ number.
 
 ```cpp
 thediscordlist::options options;
-options.bot_id = "161660517914509312";            // default: bot.me.id once ready
+options.bot_id = "161660517914509312";            // default: fetched once the first shard is ready
 options.base_url = "https://thediscordlist.com/api";
 
 options.stats.enabled = true;
@@ -139,10 +139,10 @@ commands on your listing. Turn it on only if that is what you mean.
 `enabled = false` stops a publisher from running on its own; a manual post
 still works.
 
-`bot_id` is your Discord **application** id. The default, `bot.me.id`, is the
-bot user's id, which equals the application id for nearly every bot (D++ reads
-application commands with it too). Set it by hand if yours differs, or to start
-heartbeating before the first `READY`.
+`bot_id` is your Discord **application** id. By default it is fetched from
+Discord once the first shard is ready, because `bot.me.id` is the bot user's id,
+which differs from the application id on some older bots. Set it by hand to skip
+that request, or to start heartbeating before the first `READY`.
 
 ## Events and manual posting
 

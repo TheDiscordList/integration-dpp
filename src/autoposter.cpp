@@ -82,10 +82,17 @@ public:
 	}
 
 	std::string bot_id() override {
-		if (!bot_id_.empty()) {
-			return bot_id_;
-		}
-		return bot_.me.id.empty() ? std::string() : bot_.me.id.str();
+		return bot_id_;
+	}
+
+	void fetch_application_id(std::function<void(std::optional<std::string>, const std::string&)> done) override {
+		bot_.current_application_get([done](const dpp::confirmation_callback_t& result) {
+			if (result.is_error() || !std::holds_alternative<dpp::application>(result.value)) {
+				done(std::nullopt, result.get_error().message);
+				return;
+			}
+			done(std::get<dpp::application>(result.value).id.str(), "");
+		});
 	}
 
 	std::optional<std::uint64_t> server_count() override {
@@ -144,16 +151,21 @@ public:
 		return out;
 	}
 
-	// The raw REST body, not dpp::slashcommand::to_json(): that one turns a null
+	// Not global_commands_get(), which addresses bot.me.id rather than the application. And the
+	// raw REST body, not dpp::slashcommand::to_json(): that one turns a null
 	// default_member_permissions into "0" (admins only) and numeric choices into strings.
-	void fetch_commands(std::function<void(std::optional<std::string>, const std::string&)> done) override {
-		bot_.global_commands_get([done](const dpp::confirmation_callback_t& result) {
-			if (result.is_error()) {
-				done(std::nullopt, result.get_error().message);
-				return;
-			}
-			done(result.http_info.body, "");
-		});
+	void fetch_commands(const std::string& application_id,
+		std::function<void(std::optional<std::string>, const std::string&)> done) override {
+		dpp::cluster* bot = &bot_;
+		bot_.post_rest(API_PATH "/applications", application_id, "commands", dpp::m_get, "",
+			[bot, done](nlohmann::json&, const dpp::http_request_completion_t& http) {
+				dpp::confirmation_callback_t result(bot, dpp::confirmation(), http);
+				if (result.is_error()) {
+					done(std::nullopt, result.get_error().message);
+					return;
+				}
+				done(http.body, "");
+			});
 	}
 
 	void log(dpp::loglevel level, const std::string& message) override {
