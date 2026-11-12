@@ -100,7 +100,7 @@ outcome classify(const response& r, std::int64_t unix_ms) {
 		case 429: {
 			o.kind = outcome_kind::throttled;
 			auto seconds = parse_number(r.retry_after);
-			double wait_ms = seconds && *seconds > 0 ? *seconds * 1000 : 60'000.0;
+			double wait_ms = seconds && *seconds > 0 ? *seconds * 1000 : static_cast<double>(default_retry_after_ms);
 			auto reset = parse_number(r.ratelimit_reset);
 			if (reset && *reset > 0) {
 				wait_ms = std::max(wait_ms, *reset * 1000 - static_cast<double>(unix_ms));
@@ -127,8 +127,36 @@ outcome classify(const response& r, std::int64_t unix_ms) {
 }
 
 std::int64_t backoff_ms(int attempt, double random01) {
-	double base = std::min(1000.0 * std::pow(2.0, attempt), 30'000.0);
+	double base = std::min(static_cast<double>(backoff_base_ms) * std::pow(2.0, attempt), static_cast<double>(backoff_max_ms));
 	return std::llround(base * (0.5 + random01 * 0.5));
+}
+
+std::optional<std::uint64_t> loaded_guilds(std::uint64_t cached, std::uint64_t listed, std::int64_t since_ready_ms) {
+	if (cached < listed && since_ready_ms < guild_load_limit_ms) {
+		return std::nullopt;
+	}
+	return cached;
+}
+
+std::optional<std::uint64_t> total_guilds(const std::vector<shard_report>& shards) {
+	if (shards.empty()) {
+		return std::nullopt;
+	}
+	std::uint64_t total = 0;
+	for (const auto& shard : shards) {
+		if (!shard.guilds) {
+			return std::nullopt;
+		}
+		total += *shard.guilds;
+	}
+	return total;
+}
+
+dpp::timer_callback_t one_shot(dpp::timer_callback_t stop, std::function<void()> fire) {
+	return [stop = std::move(stop), fire = std::move(fire)](dpp::timer handle) {
+		fire();
+		stop(handle);
+	};
 }
 
 std::string shard_status(bool connected, bool has_session) {
@@ -155,9 +183,12 @@ nlohmann::json stats_body(std::uint64_t server_count, std::uint32_t shard_count)
 nlohmann::json heartbeat_body(const cluster_info& cluster, const std::vector<shard_report>& shards) {
 	auto list = nlohmann::json::array();
 	for (const auto& shard : shards) {
-		nlohmann::json entry = {{"id", shard.id}, {"status", shard.status}, {"guilds", shard.guilds}};
+		nlohmann::json entry = {{"id", shard.id}, {"status", shard.status}};
 		if (shard.latency_ms) {
 			entry["latency_ms"] = *shard.latency_ms;
+		}
+		if (shard.guilds) {
+			entry["guilds"] = *shard.guilds;
 		}
 		list.push_back(std::move(entry));
 	}
@@ -287,8 +318,12 @@ void engine::clear(state& s) {
 
 void engine::send(state& s, const std::string& path, const std::string& body, bool heartbeat, std::int64_t next_tick_ms,
 	then_fn then, int attempt) {
-	// Heartbeats bypass the suspension: a dropped stats post is a stale number, a dropped
-	// heartbeat is a false "down" on the public status page.
+	if (stopped_ && attempt > 0) {
+		then(skipped("stopped"));
+		return;
+	}
+	// Heartbeats have their own limiter, so they neither set nor obey the suspension: a dropped
+	// stats post is a stale number, a dropped heartbeat is a false "down" on the public status page.
 	if (!heartbeat && host_->now_ms() < suspended_until_) {
 		then(react(s, outcome{}));
 		return;
@@ -305,12 +340,16 @@ void engine::send(state& s, const std::string& path, const std::string& body, bo
 			auto now = self->host_->now_ms();
 			auto result = classify(r, unix_now_ms());
 			bool throttled = result.kind == outcome_kind::throttled;
+			std::int64_t wait = 0;
 			if (throttled) {
-				self->suspended_until_ = now + result.retry_after_ms + std::llround(self->host_->random() * 2000);
+				wait = result.retry_after_ms + std::llround(self->host_->random() * retry_jitter_ms);
+				if (!heartbeat) {
+					self->suspended_until_ = now + wait;
+				}
 			}
 			if ((throttled || result.kind == outcome_kind::transient) && attempt + 1 < max_attempts) {
 				// A 429 is retried once its wait is over, anything else after a backoff.
-				auto delay = throttled ? self->suspended_until_ - now : backoff_ms(attempt, self->host_->random());
+				auto delay = throttled ? wait : backoff_ms(attempt, self->host_->random());
 				// A retry that would outlast the next tick is dropped: that tick carries fresher data.
 				if (next_tick_ms <= 0 || delay < next_tick_ms) {
 					self->host_->schedule(delay, [weak, target, path, body, heartbeat, next_tick_ms, then, attempt] {
@@ -329,6 +368,19 @@ void engine::send(state& s, const std::string& path, const std::string& body, bo
 }
 
 post_result engine::react(state& s, const outcome& o) {
+	if (s.kind == publisher::commands) {
+		switch (o.kind) {
+			case outcome_kind::transient:
+			case outcome_kind::throttled:
+			case outcome_kind::dropped:
+			case outcome_kind::plan:
+				retry_commands();
+				break;
+			default:
+				clear(s);
+				break;
+		}
+	}
 	switch (o.kind) {
 		case outcome_kind::ok:
 			if (s.kind == publisher::heartbeat) {
@@ -423,22 +475,61 @@ void engine::begin_heartbeat() {
 }
 
 void engine::start() {
-	locked([&] {
-		if (stopped_ || started_) {
+	locked([&] { begin(); });
+}
+
+std::string engine::bot_id() {
+	return application_id_.empty() ? host_->bot_id() : application_id_;
+}
+
+void engine::begin() {
+	if (stopped_ || started_) {
+		return;
+	}
+	if (bot_id().empty()) {
+		return resolve_bot_id();
+	}
+	started_ = true;
+	if (cluster_) {
+		log(dpp::ll_info, "Publishing as cluster " + std::to_string(cluster_->id) + " of " +
+			std::to_string(cluster_->count) + ".");
+	}
+	begin_heartbeat();
+	if (opts_.stats.enabled && elected_) {
+		schedule(stats_, stats_first_post_delay_ms, &engine::stats_tick);
+	}
+	if (opts_.commands.enabled && elected_) {
+		schedule(commands_, commands_delay_ms, &engine::commands_tick);
+	}
+}
+
+// D++ only keeps the bot user's id, which differs from the application id on older bots, and
+// TheDiscordList would answer those with a 404 that disables the publisher.
+void engine::resolve_bot_id() {
+	if (resolving_bot_id_) {
+		return;
+	}
+	resolving_bot_id_ = true;
+	std::weak_ptr<engine> weak = weak_from_this();
+	host_->fetch_application_id([weak](std::optional<std::string> id, const std::string& error) {
+		auto self = weak.lock();
+		if (!self) {
 			return;
 		}
-		started_ = true;
-		if (cluster_) {
-			log(dpp::ll_info, "Publishing as cluster " + std::to_string(cluster_->id) + " of " +
-				std::to_string(cluster_->count) + ".");
-		}
-		begin_heartbeat();
-		if (opts_.stats.enabled && elected_) {
-			schedule(stats_, stats_first_post_delay_ms, &engine::stats_tick);
-		}
-		if (opts_.commands.enabled && elected_) {
-			schedule(commands_, commands_delay_ms, &engine::commands_tick);
-		}
+		self->locked([&] {
+			self->resolving_bot_id_ = false;
+			if (id && !id->empty()) {
+				self->application_id_ = *id;
+				return self->begin();
+			}
+			self->warn_once("no-application-id", "Could not fetch the application id from Discord, so nothing is posted "
+				"yet (" + error + "). Retrying every minute; options.bot_id skips this.");
+			self->host_->schedule(stats_remeasure_ms, [weak] {
+				if (auto again = weak.lock()) {
+					again->start();
+				}
+			});
+		});
 	});
 }
 
@@ -525,22 +616,22 @@ void engine::publish_stats(bool manual, result_callback done) {
 		return finish(done, skipped("min-gap"));
 	}
 
-	auto bot_id = host_->bot_id();
-	if (bot_id.empty()) {
+	auto id = bot_id();
+	if (id.empty()) {
 		warn_once("no-bot-id", "The bot id is not known yet. Pass options.bot_id, or wait for the first shard to be ready.");
 		schedule(stats_, stats_remeasure_ms, &engine::stats_tick);
 		return finish(done, skipped("no-bot-id"));
 	}
 	auto count = host_->server_count();
 	if (!count) {
-		warn_once("unmeasurable", "Could not measure the server count. A bot running more than one cluster must pass "
-			"options.server_count returning the bot-wide total.");
+		warn_once("unmeasurable", "The server count is not known yet, so stats are waiting. That is normal while shards "
+			"start; a bot running more than one cluster must pass options.server_count returning the bot-wide total.");
 		schedule(stats_, stats_remeasure_ms, &engine::stats_tick);
 		return finish(done, skipped("unmeasurable"));
 	}
 
 	auto shard_count = host_->shard_count();
-	// Every stats post re-indexes the listing and fires a webhook, even for the same number.
+	// The server treats an unchanged count as a no-op, so re-sending one only spends rate budget.
 	if (count == last_count_ && shard_count == last_shard_count_ && now < last_post_at_ + stats_force_after_ms) {
 		schedule(stats_, interval, &engine::stats_tick);
 		return finish(done, skipped("unchanged"));
@@ -548,7 +639,7 @@ void engine::publish_stats(bool manual, result_callback done) {
 
 	last_post_at_ = now;
 	stats_.in_flight = true;
-	send(stats_, "/bots/" + bot_id + "/stats", stats_body(*count, shard_count).dump(), false, interval,
+	send(stats_, "/bots/" + id + "/stats", stats_body(*count, shard_count).dump(), false, interval,
 		[this, count, shard_count, interval, done](const post_result& result) {
 			stats_.in_flight = false;
 			if (result.ok) {
@@ -577,19 +668,19 @@ void engine::beat(bool manual, result_callback done) {
 		return finish(done, skipped("in-flight"));
 	}
 
-	auto bot_id = host_->bot_id();
-	auto shards = bot_id.empty() ? std::vector<shard_report>{} : host_->shards();
+	auto id = bot_id();
+	auto shards = id.empty() ? std::vector<shard_report>{} : host_->shards();
 	// Before login. The API requires at least one shard.
 	if (shards.empty()) {
 		if (!manual && heartbeat_started_) {
 			schedule_next_beat();
 		}
-		return finish(done, skipped(bot_id.empty() ? "no-bot-id" : "no-shards"));
+		return finish(done, skipped(id.empty() ? "no-bot-id" : "no-shards"));
 	}
 
 	heartbeat_.in_flight = true;
 	last_beat_at_ = host_->now_ms();
-	send(heartbeat_, "/bots/" + bot_id + "/heartbeat", heartbeat_body(*cluster_, shards).dump(), true,
+	send(heartbeat_, "/bots/" + id + "/heartbeat", heartbeat_body(*cluster_, shards).dump(), true,
 		heartbeat_interval_ms_, [this, manual, done](const post_result& result) {
 			heartbeat_.in_flight = false;
 			// A manual beat revives a loop that died with a disable.
@@ -623,6 +714,14 @@ void engine::commands_tick() {
 	publish_commands({});
 }
 
+// The only cadence commands have: they post once on success, because they change on deploy and a
+// deploy is a restart.
+void engine::retry_commands() {
+	if (opts_.commands.enabled && !commands_.disabled) {
+		schedule(commands_, commands_retry_ms, &engine::commands_tick);
+	}
+}
+
 void engine::publish_commands(result_callback done) {
 	if (commands_.disabled) {
 		return finish(done, skipped("disabled"));
@@ -631,19 +730,20 @@ void engine::publish_commands(result_callback done) {
 		return finish(done, skipped("not-elected"));
 	}
 	if (host_->now_ms() < commands_.plan_until) {
+		retry_commands();
 		return finish(done, skipped("plan"));
 	}
 	if (commands_.in_flight) {
 		return finish(done, skipped("in-flight"));
 	}
-	auto bot_id = host_->bot_id();
-	if (bot_id.empty()) {
+	auto id = bot_id();
+	if (id.empty()) {
 		return finish(done, skipped("no-bot-id"));
 	}
 
 	commands_.in_flight = true;
 	std::weak_ptr<engine> weak = weak_from_this();
-	host_->fetch_commands([weak, bot_id, done](std::optional<std::string> raw, const std::string& error) {
+	host_->fetch_commands(id, [weak, id, done](std::optional<std::string> raw, const std::string& error) {
 		auto self = weak.lock();
 		if (!self) {
 			return;
@@ -653,18 +753,20 @@ void engine::publish_commands(result_callback done) {
 			s.in_flight = false;
 			if (!raw) {
 				self->emit_error(s, 0, "Could not fetch the global application commands from Discord: " + error, false);
+				self->retry_commands();
 				return self->finish(done, skipped("fetch-failed"));
 			}
 			auto payload = commands_body(*raw, self->opts_.commands.post_empty);
 			if (!payload.body) {
 				if (payload.skipped == "fetch-failed") {
 					self->emit_error(s, 0, "Discord returned an unreadable command list.", false);
+					self->retry_commands();
 				}
 				return self->finish(done, {false, 0, payload.skipped});
 			}
 			s.in_flight = true;
 			auto* engine = self.get();
-			self->send(s, "/bots/" + bot_id + "/commands", payload.body->dump(), false, 0,
+			self->send(s, "/bots/" + id + "/commands", payload.body->dump(), false, commands_retry_ms,
 				[engine, done](const post_result& result) {
 					engine->commands_.in_flight = false;
 					engine->finish(done, result);

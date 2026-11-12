@@ -9,7 +9,6 @@ namespace thediscordlist {
 
 namespace {
 
-constexpr std::uint64_t request_timeout_seconds = 10;
 /** Above this, numshards is D++ 10.1's NO_SHARDS sentinel for a gateway-less cluster. */
 constexpr std::uint32_t max_shards = 65536;
 
@@ -42,10 +41,7 @@ public:
 	std::uint64_t schedule(std::int64_t delay_ms, std::function<void()> fn) override {
 		dpp::cluster* bot = &bot_;
 		auto seconds = static_cast<std::uint64_t>(std::max<std::int64_t>(1, (delay_ms + 999) / 1000));
-		return bot_.start_timer([bot, fn = std::move(fn)](dpp::timer handle) {
-			bot->stop_timer(handle);
-			fn();
-		}, seconds);
+		return bot_.start_timer(detail::one_shot([bot](dpp::timer handle) { bot->stop_timer(handle); }, std::move(fn)), seconds);
 	}
 
 	void cancel(std::uint64_t handle) override {
@@ -57,15 +53,14 @@ public:
 	void send(const std::string& path, const std::string& body, std::function<void(const detail::response&)> done) override {
 		dpp::cluster* bot = &bot_;
 		auto settled = std::make_shared<std::atomic<bool>>(false);
-		auto timeout = bot_.start_timer([bot, settled, done](dpp::timer handle) {
-			bot->stop_timer(handle);
+		auto timeout = bot_.start_timer(detail::one_shot([bot](dpp::timer handle) { bot->stop_timer(handle); }, [settled, done] {
 			if (settled->exchange(true)) {
 				return;
 			}
 			detail::response r;
 			r.error = "No response from TheDiscordList within 10 seconds.";
 			done(r);
-		}, request_timeout_seconds);
+		}), detail::request_timeout_seconds);
 
 		bot_.request(base_url_ + path, dpp::m_post, [bot, settled, timeout, done](const dpp::http_request_completion_t& http) {
 			if (settled->exchange(true)) {
@@ -86,10 +81,17 @@ public:
 	}
 
 	std::string bot_id() override {
-		if (!bot_id_.empty()) {
-			return bot_id_;
-		}
-		return bot_.me.id.empty() ? std::string() : bot_.me.id.str();
+		return bot_id_;
+	}
+
+	void fetch_application_id(std::function<void(std::optional<std::string>, const std::string&)> done) override {
+		bot_.current_application_get([done](const dpp::confirmation_callback_t& result) {
+			if (result.is_error() || !std::holds_alternative<dpp::application>(result.value)) {
+				done(std::nullopt, result.get_error().message);
+				return;
+			}
+			done(std::get<dpp::application>(result.value).id.str(), "");
+		});
 	}
 
 	std::optional<std::uint64_t> server_count() override {
@@ -102,7 +104,7 @@ public:
 		}
 		// The guild cache is process-wide, so it is the bot-wide total only with one cluster.
 		if (cluster_ && cluster_->count == 1) {
-			return dpp::get_guild_count();
+			return detail::total_guilds(shards());
 		}
 		return std::nullopt;
 	}
@@ -133,10 +135,13 @@ public:
 		for (std::uint32_t id = bot_.cluster_id; id < total; id += bot_.maxclusters) {
 			detail::shard_report report;
 			report.id = id;
-			report.guilds = guilds[id];
 			if (auto* shard = bot_.get_shard(id)) {
-				report.status = detail::shard_status(shard->is_connected(), !shard->sessionid.empty());
+				bool connected = shard->is_connected();
+				report.status = detail::shard_status(connected, !shard->sessionid.empty());
 				report.latency_ms = detail::latency_ms(shard->websocket_ping);
+				if (connected) {
+					report.guilds = loaded_guilds(id, guilds[id]);
+				}
 			} else {
 				report.status = detail::shard_status(false, false);
 			}
@@ -145,23 +150,48 @@ public:
 		return out;
 	}
 
-	// The raw REST body, not dpp::slashcommand::to_json(): that one turns a null
+	// Not global_commands_get(), which addresses bot.me.id rather than the application. And the
+	// raw REST body, not dpp::slashcommand::to_json(): that one turns a null
 	// default_member_permissions into "0" (admins only) and numeric choices into strings.
-	void fetch_commands(std::function<void(std::optional<std::string>, const std::string&)> done) override {
-		bot_.global_commands_get([done](const dpp::confirmation_callback_t& result) {
-			if (result.is_error()) {
-				done(std::nullopt, result.get_error().message);
-				return;
-			}
-			done(result.http_info.body, "");
-		});
+	void fetch_commands(const std::string& application_id,
+		std::function<void(std::optional<std::string>, const std::string&)> done) override {
+		dpp::cluster* bot = &bot_;
+		bot_.post_rest(API_PATH "/applications", application_id, "commands", dpp::m_get, "",
+			[bot, done](nlohmann::json&, const dpp::http_request_completion_t& http) {
+				dpp::confirmation_callback_t result(bot, dpp::confirmation(), http);
+				if (result.is_error()) {
+					done(std::nullopt, result.get_error().message);
+					return;
+				}
+				done(http.body, "");
+			});
 	}
 
 	void log(dpp::loglevel level, const std::string& message) override {
 		bot_.log(level, message);
 	}
 
+	void shard_ready(std::uint32_t id, std::uint64_t listed) {
+		std::lock_guard<std::mutex> lock(ready_mutex_);
+		ready_[id] = {listed, now_ms()};
+	}
+
 private:
+	struct ready_shard {
+		std::uint64_t listed;
+		std::int64_t at_ms;
+	};
+
+	std::optional<std::uint64_t> loaded_guilds(std::uint32_t id, std::uint64_t cached) {
+		std::lock_guard<std::mutex> lock(ready_mutex_);
+		auto ready = ready_.find(id);
+		// Absent when this poster was constructed after the shard's READY.
+		if (ready == ready_.end()) {
+			return cached;
+		}
+		return detail::loaded_guilds(cached, ready->second.listed, now_ms() - ready->second.at_ms);
+	}
+
 	dpp::cluster& bot_;
 	std::string token_;
 	std::string base_url_;
@@ -170,6 +200,8 @@ private:
 	std::optional<cluster_info> cluster_;
 	std::mutex random_mutex_;
 	std::mt19937_64 random_;
+	std::mutex ready_mutex_;
+	std::unordered_map<std::uint32_t, ready_shard> ready_;
 };
 
 }
@@ -202,6 +234,8 @@ autoposter::autoposter(dpp::cluster& bot, std::string token, options opts) : imp
 	bool has_bot_id = !opts.bot_id.empty();
 
 	auto host = std::make_unique<dpp_host>(bot, std::move(token), opts, cluster);
+	// Owned by the engine, so it lives as long as weak.lock() succeeds.
+	auto* shards = host.get();
 	impl_->engine = std::make_shared<detail::engine>(std::move(host), std::move(opts), cluster, elected);
 	std::weak_ptr<detail::engine> weak = impl_->engine;
 
@@ -210,8 +244,9 @@ autoposter::autoposter(dpp::cluster& bot, std::string token, options opts) : imp
 		impl_->engine->start_heartbeat();
 	}
 
-	impl_->ready = bot.on_ready([weak](const dpp::ready_t&) {
+	impl_->ready = bot.on_ready([weak, shards](const dpp::ready_t& event) {
 		if (auto engine = weak.lock()) {
+			shards->shard_ready(event.shard_id, event.guild_count);
 			engine->start();
 			engine->beat_now();
 		}

@@ -4,7 +4,8 @@
  * TheDiscordList integration for D++.
  *
  *     dpp::cluster bot(std::getenv("DISCORD_TOKEN"));
- *     thediscordlist::autoposter poster(bot, std::getenv("TDL_TOKEN"));
+ *     const char* tdl_token = std::getenv("TDL_TOKEN");
+ *     thediscordlist::autoposter poster(bot, tdl_token ? tdl_token : "");
  *     bot.start(dpp::st_wait);
  */
 
@@ -20,7 +21,7 @@
 
 namespace thediscordlist {
 
-inline constexpr const char* version = "0.2.0";
+inline constexpr const char* version = "0.2.1";
 inline constexpr const char* default_base_url = "https://thediscordlist.com/api";
 
 enum class publisher { stats, heartbeat, commands };
@@ -49,7 +50,7 @@ struct cluster_info {
 };
 
 struct options {
-	/** Discord application id. Default: bot.me.id once the first shard is ready. */
+	/** Discord application id. Default: fetched from Discord once the first shard is ready. */
 	std::string bot_id;
 	std::string base_url = default_base_url;
 

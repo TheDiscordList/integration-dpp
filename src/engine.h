@@ -23,6 +23,7 @@ inline constexpr std::int64_t stats_first_post_delay_ms = 5'000;
 /** Republish an unchanged count this often, so a listing never looks abandoned. */
 inline constexpr std::int64_t stats_force_after_ms = 1'800'000;
 inline constexpr std::int64_t stats_remeasure_ms = 60'000;
+inline constexpr std::int64_t guild_load_limit_ms = 60'000;
 /** No two stats posts come closer than this, whatever options.stats.min_gap says. */
 inline constexpr std::chrono::seconds stats_min_gap_floor{60};
 inline constexpr std::int64_t heartbeat_min_interval_ms = 15'000;
@@ -32,10 +33,16 @@ inline constexpr std::int64_t heartbeat_jitter_ms = 5'000;
 inline constexpr std::int64_t heartbeat_soon_gap_ms = 10'000;
 /** Offset from the first stats post: the two share one server-side rate budget. */
 inline constexpr std::int64_t commands_delay_ms = 10'000;
+inline constexpr std::int64_t commands_retry_ms = 300'000;
 /** The Gold tier is derived per request, so a bot can gain it mid-run. */
 inline constexpr std::int64_t plan_reprobe_ms = 1'800'000;
 inline constexpr std::int64_t max_latency_ms = 600'000;
+inline constexpr std::int64_t default_retry_after_ms = 60'000;
 inline constexpr std::int64_t max_retry_after_ms = 3'600'000;
+inline constexpr std::int64_t retry_jitter_ms = 2'000;
+inline constexpr std::int64_t backoff_base_ms = 1'000;
+inline constexpr std::int64_t backoff_max_ms = 30'000;
+inline constexpr std::uint64_t request_timeout_seconds = 10;
 inline constexpr int max_attempts = 3;
 inline constexpr const char* content_type = "application/json";
 
@@ -66,8 +73,22 @@ struct shard_report {
 	std::uint32_t id = 0;
 	std::string status;
 	std::optional<std::int64_t> latency_ms;
-	std::uint64_t guilds = 0;
+	/** Only from a ready shard: the API reads a 0 as the bot's real count. */
+	std::optional<std::uint64_t> guilds;
 };
+
+/**
+ * A shard's guild count once it can be trusted. D++ caches guilds one GUILD_CREATE at a time
+ * after READY has listed them, so until it catches up the cache understates. A guild that
+ * stays unavailable never arrives, hence the time limit.
+ */
+std::optional<std::uint64_t> loaded_guilds(std::uint64_t cached, std::uint64_t listed, std::int64_t since_ready_ms);
+
+/** nullopt while any shard's count is unknown: a partial total must not reach the listing. */
+std::optional<std::uint64_t> total_guilds(const std::vector<shard_report>& shards);
+
+/** D++ 10.0's stop_timer() deletes the callback it is called from, so stopping must come last. */
+dpp::timer_callback_t one_shot(dpp::timer_callback_t stop, std::function<void()> fire);
 
 std::string shard_status(bool connected, bool has_session);
 std::optional<std::int64_t> latency_ms(double websocket_ping_seconds);
@@ -100,11 +121,14 @@ public:
 	virtual std::uint64_t schedule(std::int64_t delay_ms, std::function<void()> fn) = 0;
 	virtual void cancel(std::uint64_t handle) = 0;
 	virtual void send(const std::string& path, const std::string& body, std::function<void(const response&)> done) = 0;
+	/** options.bot_id. When it is empty the engine fetches the application id instead. */
 	virtual std::string bot_id() = 0;
+	virtual void fetch_application_id(std::function<void(std::optional<std::string> id, const std::string& error)> done) = 0;
 	virtual std::optional<std::uint64_t> server_count() = 0;
 	virtual std::uint32_t shard_count() = 0;
 	virtual std::vector<shard_report> shards() = 0;
-	virtual void fetch_commands(std::function<void(std::optional<std::string> body, const std::string& error)> done) = 0;
+	virtual void fetch_commands(const std::string& application_id,
+		std::function<void(std::optional<std::string> body, const std::string& error)> done) = 0;
 	virtual void log(dpp::loglevel level, const std::string& message) = 0;
 };
 
@@ -153,6 +177,9 @@ private:
 	void report_once(state& s, int status, const std::string& message);
 	void emit_error(state& s, int status, const std::string& message, bool retryable);
 
+	std::string bot_id();
+	void begin();
+	void resolve_bot_id();
 	void begin_heartbeat();
 	void stats_tick();
 	void publish_stats(bool manual, result_callback done);
@@ -162,6 +189,7 @@ private:
 	void retune(const nlohmann::json& body);
 	void commands_tick();
 	void publish_commands(result_callback done);
+	void retry_commands();
 
 	std::unique_ptr<host> host_;
 	options opts_;
@@ -176,8 +204,10 @@ private:
 	bool started_ = false;
 	bool heartbeat_started_ = false;
 	bool stopped_ = false;
+	std::string application_id_;
+	bool resolving_bot_id_ = false;
 
-	/** One client-wide 429 suspension: stats and commands share one per-bot budget. */
+	/** One 429 suspension for stats and commands, which share one per-bot budget. */
 	std::int64_t suspended_until_ = 0;
 
 	state stats_{publisher::stats};

@@ -3,6 +3,7 @@
 #include <openssl/evp.h>
 #include <openssl/hmac.h>
 
+#include <algorithm>
 #include <cctype>
 #include <cstdio>
 #include <fstream>
@@ -137,6 +138,59 @@ void test_webhooks() {
 	CHECK(ready.data["ready_at"] == "2026-10-18T12:00:00+00:00");
 }
 
+// tests/fixtures/sdk-conformance.json is shared byte-for-byte by every TheDiscordList SDK.
+void test_conformance() {
+	std::ifstream file(THEDISCORDLIST_DPP_CONFORMANCE_FIXTURE);
+	auto fixture = json::parse(file, nullptr, false);
+	CHECK(fixture.is_object());
+	if (!fixture.is_object()) {
+		return;
+	}
+
+	const auto& signature = fixture["webhook_signature"];
+	const auto secret = signature["secret"].get<std::string>();
+	CHECK(!signature["vectors"].empty());
+	for (const auto& vector : signature["vectors"]) {
+		bool valid = !verify_error(vector["body"].get<std::string>(), vector["header"].get<std::string>(), secret,
+			vector["now"].get<std::time_t>());
+		if (valid != vector["valid"].get<bool>()) {
+			std::fprintf(stderr, "vector \"%s\" came out %s\n", vector["name"].get<std::string>().c_str(), valid ? "valid" : "invalid");
+		}
+		CHECK(valid == vector["valid"].get<bool>());
+	}
+
+	const auto& d = fixture["defaults"];
+	const auto ms = [](const json& seconds) { return seconds.get<std::int64_t>() * 1000; };
+	options defaults;
+	CHECK(signature["tolerance_seconds"] == default_webhook_tolerance.count());
+	CHECK(d["base_url"] == default_base_url);
+	CHECK(d["base_url"] == defaults.base_url);
+	CHECK(d["timeout_seconds"] == detail::request_timeout_seconds);
+	CHECK(d["retry"]["attempts"] == detail::max_attempts);
+	CHECK(ms(d["retry"]["backoff_base_seconds"]) == detail::backoff_base_ms);
+	CHECK(ms(d["retry"]["backoff_max_seconds"]) == detail::backoff_max_ms);
+	CHECK(ms(d["rate_limit"]["default_seconds"]) == detail::default_retry_after_ms);
+	CHECK(ms(d["rate_limit"]["max_seconds"]) == detail::max_retry_after_ms);
+	CHECK(ms(d["rate_limit"]["jitter_max_seconds"]) == detail::retry_jitter_ms);
+	CHECK(ms(d["forbidden_reprobe_seconds"]) == detail::plan_reprobe_ms);
+	CHECK(ms(d["stats"]["first_delay_seconds"]) == detail::stats_first_post_delay_ms);
+	CHECK(d["stats"]["interval_seconds"] == defaults.stats.interval.count());
+	CHECK(d["stats"]["debounce_seconds"] == defaults.stats.debounce.count());
+	CHECK(d["stats"]["min_gap_seconds"] == defaults.stats.min_gap.count());
+	CHECK(d["stats"]["min_gap_seconds"] == detail::stats_min_gap_floor.count());
+	CHECK(ms(d["stats"]["force_after_seconds"]) == detail::stats_force_after_ms);
+	CHECK(d["heartbeat"]["interval_seconds"] == defaults.heartbeat.interval.count());
+	CHECK(ms(d["heartbeat"]["jitter_max_seconds"]) == detail::heartbeat_jitter_ms);
+	CHECK(ms(d["commands"]["first_delay_seconds"]) == detail::commands_delay_ms);
+	CHECK(ms(d["commands"]["retry_seconds"]) == detail::commands_retry_ms);
+
+	// The states a shard actually reports: D++ gives no way to tell one is down for good.
+	const auto& states = fixture["shard_states"];
+	for (const auto& state : {detail::shard_status(true, true), detail::shard_status(false, true), detail::shard_status(false, false)}) {
+		CHECK(std::find(states.begin(), states.end(), json(state)) != states.end());
+	}
+}
+
 // ---------------------------------------------------------------------------------------
 // Pure payload shaping and classification
 
@@ -154,13 +208,15 @@ void test_shaping() {
 	CHECK(detail::latency_ms(0.0426) == 43);
 	CHECK(detail::latency_ms(9999.0) == detail::max_latency_ms);
 
-	auto beat = detail::heartbeat_body({1, 4}, {{1, "ready", 43, 120}, {5, "connecting", std::nullopt, 0}});
+	auto beat = detail::heartbeat_body({1, 4}, {{1, "ready", 43, 120}, {5, "connecting", std::nullopt, std::nullopt}});
 	CHECK(beat["cluster"] == 1);
 	CHECK(beat["cluster_count"] == 4);
 	CHECK(beat["shards"].size() == 2);
 	CHECK(beat["shards"][0] == json::parse(R"({"id":1,"status":"ready","latency_ms":43,"guilds":120})"));
 	CHECK(!beat["shards"][1].contains("latency_ms"));
+	CHECK(!beat["shards"][1].contains("guilds"));
 	CHECK(beat["shards"][1]["status"] == "connecting");
+	CHECK(detail::heartbeat_body({0, 1}, {{0, "ready", std::nullopt, 0}})["shards"][0]["guilds"] == 0);
 
 	auto raw = R"([{"id":"1","name":"ping","description":"Pong","default_member_permissions":null,"options":[{"type":4,"name":"n","description":"d","choices":[{"name":"one","value":1}]}]}])";
 	auto commands = detail::commands_body(raw, false);
@@ -192,6 +248,33 @@ void test_shaping() {
 	CHECK(!detail::resolve_cluster(std::nullopt, 0, 0));
 	CHECK(!detail::resolve_cluster(cluster_info{4, 4}, 0, 1));
 	CHECK(!detail::resolve_cluster(cluster_info{0, 1025}, 0, 1));
+}
+
+void test_guilds_wait_for_the_cache_to_load() {
+	CHECK(!detail::loaded_guilds(0, 100, 1'000));
+	CHECK(!detail::loaded_guilds(99, 100, detail::guild_load_limit_ms - 1));
+	CHECK(detail::loaded_guilds(100, 100, 1'000) == 100);
+	CHECK(detail::loaded_guilds(101, 100, 1'000) == 101);
+	// A brand-new bot really is in no guilds.
+	CHECK(detail::loaded_guilds(0, 0, 0) == 0);
+	// A guild stuck unavailable must not hold the count back for good.
+	CHECK(detail::loaded_guilds(99, 100, detail::guild_load_limit_ms) == 99);
+
+	CHECK(detail::total_guilds({{0, "ready", std::nullopt, 40}, {1, "ready", std::nullopt, 2}}) == 42);
+	CHECK(!detail::total_guilds({{0, "ready", std::nullopt, 40}, {1, "connecting", std::nullopt, std::nullopt}}));
+	CHECK(!detail::total_guilds({}));
+}
+
+void test_one_shot_stops_last() {
+	std::vector<std::string> order;
+	// Like D++ 10.0's stop_timer(), stopping destroys the running callback.
+	dpp::timer_callback_t timer;
+	timer = detail::one_shot([&](dpp::timer) {
+		order.emplace_back("stop");
+		timer = nullptr;
+	}, [&] { order.emplace_back("fire"); });
+	timer(1);
+	CHECK((order == std::vector<std::string>{"fire", "stop"}));
 }
 
 detail::response reply(int status, std::string body = "", std::string retry_after = "", std::string reset = "") {
@@ -261,6 +344,8 @@ struct fake_host final : detail::host {
 	std::vector<timer> timers;
 	std::vector<request> requests;
 	std::vector<std::function<void(std::optional<std::string>, const std::string&)>> fetches;
+	std::vector<std::function<void(std::optional<std::string>, const std::string&)>> application_fetches;
+	std::vector<std::string> fetched_for;
 	std::string id = "123";
 	std::optional<std::uint64_t> count = 42;
 	std::vector<detail::shard_report> shard_list = {{0, "ready", 40, 42}};
@@ -285,7 +370,11 @@ struct fake_host final : detail::host {
 	std::optional<std::uint64_t> server_count() override { return count; }
 	std::uint32_t shard_count() override { return 2; }
 	std::vector<detail::shard_report> shards() override { return shard_list; }
-	void fetch_commands(std::function<void(std::optional<std::string>, const std::string&)> done) override {
+	void fetch_application_id(std::function<void(std::optional<std::string>, const std::string&)> done) override {
+		application_fetches.push_back(std::move(done));
+	}
+	void fetch_commands(const std::string& application_id, std::function<void(std::optional<std::string>, const std::string&)> done) override {
+		fetched_for.push_back(application_id);
 		fetches.push_back(std::move(done));
 	}
 	void log(dpp::loglevel, const std::string&) override {}
@@ -519,6 +608,35 @@ void test_throttle_is_shared_but_heartbeats_bypass() {
 	CHECK(h->host->requests.back().path == "/bots/123/commands");
 }
 
+void test_heartbeat_throttle_leaves_stats_and_commands_alone() {
+	options opts;
+	opts.commands.enabled = false;
+	auto h = make(opts);
+	h->engine->start();
+	h->host->advance(0);
+	CHECK(h->host->requests[0].path == "/bots/123/heartbeat");
+	h->host->respond(0, reply(429, "", "20"));
+
+	// Stats still go out on time, while the heartbeat waits out its own 429.
+	h->host->advance(5'000);
+	CHECK(h->host->requests.size() == 2);
+	CHECK(h->host->requests[1].path == "/bots/123/stats");
+	h->host->respond(1, reply(200));
+	post_result commands;
+	h->engine->post(publisher::commands, [&](const post_result& r) { commands = r; });
+	h->host->fetches.at(0)(std::string(R"([{"name":"ping","description":"Pong"}])"), "");
+	CHECK(h->host->requests.size() == 3);
+	CHECK(h->host->requests[2].path == "/bots/123/commands");
+	h->host->respond(2, reply(200));
+	CHECK(commands.ok);
+
+	h->host->advance(14'999);
+	CHECK(h->host->requests.size() == 3);
+	h->host->advance(1);
+	CHECK(h->host->requests.size() == 4);
+	CHECK(h->host->requests[3].path == "/bots/123/heartbeat");
+}
+
 void test_throttle_is_retried_before_the_next_tick() {
 	auto h = make(only(publisher::stats));
 	h->engine->start();
@@ -596,6 +714,17 @@ void test_server_errors_are_retried() {
 	CHECK(h->disabled.empty());
 }
 
+void test_stop_ends_a_pending_retry() {
+	auto h = make(only(publisher::stats));
+	post_result result;
+	h->engine->post(publisher::stats, [&](const post_result& r) { result = r; });
+	h->host->respond(0, reply(503));
+	h->engine->stop();
+	h->host->advance(10'000);
+	CHECK(h->host->requests.size() == 1);
+	CHECK(result.skipped == "stopped");
+}
+
 void test_payload_errors_are_reported_once() {
 	auto h = make(only(publisher::stats));
 	h->engine->start();
@@ -621,6 +750,102 @@ void test_unknown_cluster_count_never_beats() {
 	CHECK(h->disabled[0].first == publisher::heartbeat);
 	CHECK(h->disabled[0].second == "cluster-count-unknown");
 	CHECK(manual(*h->engine, publisher::heartbeat).skipped == "cluster-count-unknown");
+}
+
+void test_commands_retry_until_they_land() {
+	const std::string ping = R"([{"name":"ping","description":"Pong"}])";
+	auto h = make(only(publisher::commands));
+	h->engine->start();
+	h->host->advance(10'000);
+
+	// A failed fetch from Discord.
+	h->host->fetches.at(0)(std::nullopt, "Discord 503");
+	h->host->advance(299'999);
+	CHECK(h->host->fetches.size() == 1);
+	h->host->advance(1);
+	CHECK(h->host->fetches.size() == 2);
+
+	// An unreadable list from Discord.
+	h->host->fetches.at(1)(std::string("<html>"), "");
+	h->host->advance(300'000);
+	CHECK(h->host->fetches.size() == 3);
+
+	// 5xx on every attempt.
+	h->host->fetches.at(2)(ping, "");
+	h->host->respond(0, reply(503));
+	h->host->advance(500);
+	h->host->respond(1, reply(503));
+	h->host->advance(1'000);
+	h->host->respond(2, reply(503));
+	CHECK(h->host->requests.size() == 3);
+	h->host->advance(300'000);
+	CHECK(h->host->fetches.size() == 4);
+
+	// A 429 that outlasts the retry, whose suspension then drops the next attempt unsent.
+	h->host->fetches.at(3)(ping, "");
+	h->host->respond(3, reply(429, "", "500"));
+	h->host->advance(300'000);
+	h->host->fetches.at(4)(ping, "");
+	CHECK(h->host->requests.size() == 4);
+	h->host->advance(300'000);
+	h->host->fetches.at(5)(ping, "");
+	CHECK(h->host->requests.size() == 5);
+
+	// Success ends it.
+	h->host->respond(4, reply(200));
+	CHECK(h->posted.size() == 1);
+	h->host->advance(3'600'000);
+	CHECK(h->host->fetches.size() == 6);
+
+	for (int status : {404, 409, 422}) {
+		auto terminal = make(only(publisher::commands));
+		terminal->engine->start();
+		terminal->host->advance(10'000);
+		terminal->host->fetches.at(0)(ping, "");
+		terminal->host->respond(0, reply(status));
+		terminal->host->advance(3'600'000);
+		CHECK(terminal->host->fetches.size() == 1);
+	}
+
+	// options.commands.enabled = false means it never runs on its own.
+	options off = only(publisher::stats);
+	auto manual_only = make(off);
+	CHECK(manual(*manual_only->engine, publisher::commands).skipped == "pending");
+	manual_only->host->fetches.at(0)(std::nullopt, "Discord 503");
+	manual_only->host->advance(3'600'000);
+	CHECK(manual_only->host->fetches.size() == 1);
+}
+
+void test_bot_id_is_fetched_from_the_application() {
+	options opts;
+	opts.stats.enabled = false;
+	auto h = make(opts);
+	h->host->id = "";
+
+	// One fetch however many shards report READY, and nothing posts until it answers.
+	h->engine->start();
+	h->engine->start();
+	CHECK(h->host->application_fetches.size() == 1);
+	h->host->advance(30'000);
+	CHECK(h->host->requests.empty());
+
+	// A failure is retried; the bot user's id is never a stand-in, since that is the 404.
+	h->host->application_fetches[0](std::nullopt, "Discord is down");
+	h->host->advance(59'999);
+	CHECK(h->host->application_fetches.size() == 1);
+	h->host->advance(1);
+	CHECK(h->host->application_fetches.size() == 2);
+
+	h->host->application_fetches[1](std::string("999"), "");
+	h->host->advance(0);
+	CHECK(h->host->requests.size() == 1);
+	CHECK(h->host->requests[0].path == "/bots/999/heartbeat");
+
+	h->host->advance(10'000);
+	CHECK(h->host->fetched_for.size() == 1);
+	CHECK(h->host->fetched_for[0] == "999");
+	h->host->fetches[0](std::string(R"([{"name":"ping","description":"Pong"}])"), "");
+	CHECK(h->host->requests.back().path == "/bots/999/commands");
 }
 
 void test_commands_skip_empty_and_non_elected() {
@@ -681,19 +906,26 @@ void test_misconfigured_cluster_refuses_heartbeats() {
 
 int main() {
 	test_webhooks();
+	test_conformance();
 	test_shaping();
+	test_guilds_wait_for_the_cache_to_load();
+	test_one_shot_stops_last();
 	test_classify();
 	test_stats_publisher();
 	test_unauthorized_disables_everything();
 	test_plan_suspends_heartbeat();
 	test_not_found_and_conflict_disable();
 	test_throttle_is_shared_but_heartbeats_bypass();
+	test_heartbeat_throttle_leaves_stats_and_commands_alone();
 	test_throttle_is_retried_before_the_next_tick();
 	test_out_of_band_beats_keep_their_distance();
 	test_min_gap_has_a_floor();
 	test_server_errors_are_retried();
+	test_stop_ends_a_pending_retry();
 	test_payload_errors_are_reported_once();
 	test_unknown_cluster_count_never_beats();
+	test_commands_retry_until_they_land();
+	test_bot_id_is_fetched_from_the_application();
 	test_commands_skip_empty_and_non_elected();
 	test_missing_token_is_inert();
 	test_misconfigured_cluster_refuses_heartbeats();

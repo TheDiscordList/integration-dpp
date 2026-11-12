@@ -1,7 +1,7 @@
 cmake_minimum_required(VERSION 3.16)
 
 project(thediscordlist-dpp
-	VERSION 0.2.0
+	VERSION 0.2.1
 	DESCRIPTION "Official TheDiscordList integration for D++"
 	HOMEPAGE_URL "https://thediscordlist.com"
 	LANGUAGES CXX)
@@ -47,7 +47,8 @@ if(THEDISCORDLIST_DPP_BUILD_TESTS)
 	target_include_directories(thediscordlist-dpp-tests PRIVATE src)
 	target_compile_definitions(thediscordlist-dpp-tests PRIVATE
 		THEDISCORDLIST_DPP_PROJECT_VERSION="${PROJECT_VERSION}"
-		THEDISCORDLIST_DPP_VCPKG_MANIFEST="${CMAKE_CURRENT_SOURCE_DIR}/ports/thediscordlist-dpp/vcpkg.json")
+		THEDISCORDLIST_DPP_VCPKG_MANIFEST="${CMAKE_CURRENT_SOURCE_DIR}/ports/thediscordlist-dpp/vcpkg.json"
+		THEDISCORDLIST_DPP_CONFORMANCE_FIXTURE="${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/sdk-conformance.json")
 	target_link_libraries(thediscordlist-dpp-tests PRIVATE thediscordlist::dpp OpenSSL::Crypto)
 	add_test(NAME thediscordlist-dpp-tests COMMAND thediscordlist-dpp-tests)
 endif()

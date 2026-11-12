@@ -46,9 +46,9 @@ It starts three publishers:
 
 | Publisher | What it sends | Cadence |
 | --- | --- | --- |
-| Stats | `server_count`, `shard_count` | 5s after the first shard is ready, then every 5 min, debounced on guild join/leave |
+| Stats | `server_count`, `shard_count` | 5s after the first shard is ready or once every shard has loaded its guilds, whichever is later, then every 5 min, debounced on guild join/leave |
 | Heartbeat | per-shard status, latency and guild counts | every 30–35s, plus once when a shard becomes ready or resumes (at least 10s after the previous beat) |
-| Commands | your global slash commands | once, ~10s after ready |
+| Commands | your global slash commands | once, ~10s after ready, retried every 5 min after a server error, a rate limit or a failed fetch from Discord |
 
 Your **stats token** is on the listing's manage page, under the API tab. It is
 scoped to one listing, so it is the only credential this package needs.
@@ -70,7 +70,7 @@ cluster_id, maxclusters)` — so nothing has to be guessed:
 
 | Setup | `server_count` comes from | Stats and commands posted by | Heartbeats |
 | --- | --- | --- | --- |
-| One process, any number of shards | `dpp::get_guild_count()` | this process | this process, cluster 0 of 1 |
+| One process, any number of shards | the guild cache, once every shard has loaded | this process | this process, cluster 0 of 1 |
 | `maxclusters > 1`, one process per cluster | your `options.server_count` | cluster 0 | every cluster, for itself |
 
 Each heartbeat carries `cluster_id` and `maxclusters` as `cluster` and
@@ -94,7 +94,8 @@ options.server_count = []() -> std::optional<std::uint64_t> {
 ```
 
 Without it, cluster 0 logs a warning and posts no stats rather than a partial
-number.
+number. The callback runs on the thread that drives D++'s gateway connections,
+so return a value you refresh elsewhere rather than waiting on a network call.
 
 > **If the cluster count is invalid, heartbeats do not start.** The API
 > hard-deletes every cluster row whose id is `>= cluster_count` in the request,
@@ -107,7 +108,7 @@ number.
 
 ```cpp
 thediscordlist::options options;
-options.bot_id = "161660517914509312";            // default: bot.me.id once ready
+options.bot_id = "161660517914509312";            // default: fetched once the first shard is ready
 options.base_url = "https://thediscordlist.com/api";
 
 options.stats.enabled = true;
@@ -130,8 +131,8 @@ thediscordlist::autoposter poster(bot, token, options);
 `min_gap` is a hard floor between two stats POSTs and is never below 60
 seconds. A join storm, a mass reconnect and a manual `post_stats()` all route
 through it, so the ceiling is structurally one request per minute. An unchanged
-count is not re-sent for 30 minutes: every stats post re-indexes the listing
-and fires a webhook.
+count is not re-sent for 30 minutes: the server treats it as a no-op, so
+re-sending it only spends rate budget.
 
 `commands.post_empty` is `false` because posting an empty list **clears** the
 commands on your listing. Turn it on only if that is what you mean.
@@ -139,10 +140,10 @@ commands on your listing. Turn it on only if that is what you mean.
 `enabled = false` stops a publisher from running on its own; a manual post
 still works.
 
-`bot_id` is your Discord **application** id. The default, `bot.me.id`, is the
-bot user's id, which equals the application id for nearly every bot (D++ reads
-application commands with it too). Set it by hand if yours differs, or to start
-heartbeating before the first `READY`.
+`bot_id` is your Discord **application** id. By default it is fetched from
+Discord once the first shard is ready, because `bot.me.id` is the bot user's id,
+which differs from the application id on some older bots. Set it by hand to skip
+that request, or to start heartbeating before the first `READY`.
 
 ## Events and manual posting
 
@@ -267,11 +268,12 @@ and on the heartbeat's stats forward.
 - **Heartbeats need Gold or higher.** On a `403` the heartbeat publisher
   suspends and reprobes every 30 minutes rather than disabling: the plan is
   checked per request, so a bot can gain it mid-run.
-- **Rate limits are shared.** Stats and commands share 60 requests a minute per
-  bot; heartbeats have 120. On a `429` the poster honours `Retry-After`
-  and `X-RateLimit-Reset` (60s without either, at most an hour) with one client-wide suspension that stats and
-  commands share, while heartbeats keep going — a stale number beats a false
-  "down" on your status page.
+- **Stats and commands share a rate limit** of 60 requests a minute per bot. On
+  a `429` from either the poster honours `Retry-After` and `X-RateLimit-Reset`
+  (60s without either, at most an hour) with one suspension for both. Heartbeats
+  have their own limit and ignore the suspension — a stale number beats a false
+  "down" on your status page — so a `429` on a heartbeat delays only that
+  heartbeat.
 - **`404` never means "bad token".** It means the id is unknown or belongs to a
   server listing; the publisher disables itself with reason `not-found`. A
   `401` is the bad-token case and disables every publisher. A `409` on commands
@@ -284,6 +286,10 @@ and on the heartbeat's stats forward.
 - The server count is D++'s guild cache. Without `dpp::i_guilds` the cache never
   changes (the poster warns once), and a cache policy with `guild_policy =
   dpp::cp_none` reports 0.
+- D++ fills that cache after `READY`, one guild at a time. A shard's guild count
+  is left out of heartbeats until the shard is ready and the cache holds the
+  guilds `READY` listed (at most a minute), and stats wait for every shard, so a
+  restart cannot publish a 0 or a partial count.
 
 ## Installing
 
@@ -298,7 +304,7 @@ and on the heartbeat's stats forward.
 include(FetchContent)
 FetchContent_Declare(thediscordlist-dpp
     GIT_REPOSITORY https://github.com/TheDiscordList/integration-dpp.git
-    GIT_TAG v0.2.0)
+    GIT_TAG v0.2.1)
 FetchContent_MakeAvailable(thediscordlist-dpp)
 
 target_link_libraries(bot PRIVATE thediscordlist::dpp)
@@ -345,15 +351,20 @@ Every release:
    `find_package` version in `examples/CMakeLists.txt` with a minor release:
    CI builds the example against the installed package and fails on a
    mismatch.
-2. `git tag v0.2.0 && git push origin v0.2.0`. The workflow builds, tests,
+2. `git tag v0.2.1 && git push origin v0.2.1`. The workflow builds, tests,
    attaches a source tarball and prints the vcpkg `SHA512` of the tag archive in
    the release notes.
-3. In the vcpkg fork, copy `ports/thediscordlist-dpp` to `ports/` and replace
-   `SHA512 0` in `portfile.cmake` with the hash from the release notes.
-4. `./vcpkg install thediscordlist-dpp` to check it builds, then
+3. Pin the port: replace `SHA512` in `ports/thediscordlist-dpp/portfile.cmake`
+   with the hash from the release notes, and commit that to `main` as
+   `Pin the vcpkg port to v0.2.1`. The hash only exists once the tag does, so
+   from the version bump until this commit `--overlay-ports` fails on a hash
+   mismatch: `REF` follows the new version while `SHA512` is still the previous
+   tag's.
+4. In the vcpkg fork, copy the pinned `ports/thediscordlist-dpp` to `ports/`.
+5. `./vcpkg install thediscordlist-dpp` to check it builds, then
    `./vcpkg format-manifest ports/thediscordlist-dpp/vcpkg.json` and
    `./vcpkg x-add-version thediscordlist-dpp`.
-5. Commit `ports/thediscordlist-dpp` and `versions/`, and open a PR against
+6. Commit `ports/thediscordlist-dpp` and `versions/`, and open a PR against
    `microsoft/vcpkg` titled `[thediscordlist-dpp] new port` (later:
    `[thediscordlist-dpp] update to X.Y.Z`).
 
