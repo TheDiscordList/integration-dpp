@@ -15,8 +15,8 @@
 - A `429` on a heartbeat no longer suspends stats and commands, whose limit is
   separate.
 - `stop()` also ends a pending retry, which now reports `stopped`.
-- The release workflow pins its actions to commit SHAs and refuses a tag that is
-  not on `main`.
+- The release workflow refuses a tag that is not on `main`.
+- CI and the release workflow run on `actions/checkout` v7.
 
 ## 0.2.0 - 2026-10-18
 
